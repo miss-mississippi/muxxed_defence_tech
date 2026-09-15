@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .ipynb_checkpoints/
+.claude/
 
 # веса, данные и результаты — не в git
 weights/
