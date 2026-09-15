@@ -154,7 +154,7 @@ function makeMap(georef) {
   const map = L.map("map", georef ? { maxZoom: 22 } : { crs: L.CRS.Simple, minZoom: -6, maxZoom: 4 });
   if (georef) {
     const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 22, maxNativeZoom: 18, attribution: "Подложка © Esri World Imagery" });
+      { maxZoom: 22, maxNativeZoom: 17, attribution: "Подложка © Esri World Imagery" });  // выше 17 у Esri местами заглушки
     const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap" });
     esri.addTo(map);
@@ -364,8 +364,10 @@ document.addEventListener("keydown", e => {
   const ids = state.visibleIds, i = ids.indexOf(state.selected);
   if (e.key === "ArrowDown") { e.preventDefault(); select(ids[Math.min(i + 1, ids.length - 1)], true); }
   else if (e.key === "ArrowUp") { e.preventDefault(); select(ids[Math.max(i - 1, 0)], true); }
-  else if (e.code === "KeyC" && state.selected != null) review(state.selected, "confirmed");   // раскладка не важна
-  else if (e.code === "KeyR" && state.selected != null) review(state.selected, "rejected");
+  else if (state.selected == null) return;
+  // code не зависит от раскладки; key — запасной вариант (с/к — те же клавиши в русской раскладке)
+  else if (e.code === "KeyC" || "cCсС".includes(e.key)) review(state.selected, "confirmed");
+  else if (e.code === "KeyR" || "rRкК".includes(e.key)) review(state.selected, "rejected");
 });
 
 // ---------- старт ----------

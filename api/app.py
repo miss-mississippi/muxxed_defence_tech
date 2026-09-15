@@ -331,7 +331,7 @@ def render_report(scene: dict, rows: list) -> str:
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>Отчёт — {e(scene['filename'])}</title>
 <style>
-body{{font:14px/1.45 system-ui,sans-serif;margin:32px;color:#111}} h1{{font-size:20px;margin:0 0 4px}}
+:root{{color-scheme:light}} body{{font:14px/1.45 system-ui,sans-serif;margin:32px;color:#111;background:#fff}} h1{{font-size:20px;margin:0 0 4px}}
 table{{border-collapse:collapse;margin:12px 0 24px}} td,th{{border:1px solid #ccc;padding:4px 8px;text-align:left}}
 th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px solid #ccc}}
 </style></head><body>
