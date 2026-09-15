@@ -85,6 +85,14 @@ geojson = result.to_geojson()                      # FeatureCollection в WGS84
 
 Обучение на GPU — `notebooks/kaggle_train.ipynb` (Kaggle, T4/P100).
 
+```bash
+# проверенные экспертом обнаружения из каталога → датасет YOLO-OBB для дообучения
+.venv/bin/python scripts/export_reviewed.py --out data/reviewed_yolo
+
+# производительность на большой сцене: тайлы/с, Мпикс/с, км²/ч
+.venv/bin/python scripts/benchmark.py --size 8192 --gsd 0.5
+```
+
 ## Структура
 
 ```

@@ -161,11 +161,14 @@ def detect_scene(
         for start in range(0, len(windows), batch):
             images, kept = [], []
             for x, y, w, h in windows[start : start + batch]:
-                img = to_uint8(src.read(bands, window=Window(x, y, w, h)), limits)
-                if (img.max(axis=2) > 0).mean() < 0.05:  # пустой тайл / nodata
+                window = Window(x, y, w, h)
+                raw = src.read(bands, window=window)
+                # пустоту считаем по маске и сырым данным: тёмная вода после растяжки тоже 0, но это не пусто
+                valid = (src.dataset_mask(window=window) > 0) & (raw.max(axis=0) > 0)
+                if valid.mean() < 0.05:
                     skipped += 1
                     continue
-                images.append(img)
+                images.append(to_uint8(raw, limits))
                 kept.append((x, y, w, h))
             if images:
                 results = detector.predict_batch(images, [(x, y) for x, y, _, _ in kept], rgb=True)
@@ -247,12 +250,15 @@ def render_preview(
         bands = bands or rgb_bands(src)
         limits = stretch_limits(src, bands)
         if is_georeferenced(src):
-            with WarpedVRT(src, crs="EPSG:3857", resampling=Resampling.bilinear) as vrt:
+            # без nodata и альфа-канала GDAL не знает, где кончается снимок, — просим добавить альфу
+            add_alpha = src.nodata is None and ColorInterp.alpha not in src.colorinterp
+            with WarpedVRT(src, crs="EPSG:3857", resampling=Resampling.bilinear, add_alpha=add_alpha) as vrt:
                 data = _read_scaled(vrt, bands, max_size)
+                # прозрачность — по маске валидных данных (за контуром снимка), а не по чёрным пикселям
+                alpha = vrt.dataset_mask(out_shape=data.shape[1:])
                 west, south, east, north = transform_bounds("EPSG:3857", "EPSG:4326", *vrt.bounds)
             bounds = [[south, west], [north, east]]
         else:
             data, bounds = _read_scaled(src, bands, max_size), None
-    rgb = to_uint8(data, limits)
-    alpha = np.where(rgb.max(axis=2) > 0, 255, 0).astype(np.uint8)
-    return np.dstack([rgb, alpha]), bounds
+            alpha = src.dataset_mask(out_shape=data.shape[1:])
+    return np.dstack([to_uint8(data, limits), alpha.astype(np.uint8)]), bounds

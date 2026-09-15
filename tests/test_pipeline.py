@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import rasterio
 from pyproj import Transformer
 from rasterio.transform import from_origin
 
@@ -85,4 +86,25 @@ def test_render_preview(utm_uint16_tif):
     (south, west), (north, east) = bounds
     assert south < north and west < east
     rgba, bounds = render_preview(SAMPLE, max_size=512)
-    assert bounds is None and rgba.shape[:2] == (288, 512)
+    assert bounds is None and rgba.shape[:2] == (288, 512) and (rgba[..., 3] == 255).all()
+
+
+def test_dark_water_is_not_empty(detector, tmp_path, boats_rgb):
+    data = np.zeros((3, 1024, 3072), np.uint16)  # x 0..1024 — нули (нет данных)
+    data[:, :, 1024:2048] = 300  # тёмная вода: после растяжки 0, но это данные
+    data[:, :, 2048:] = boats_rgb[:1024, :1024].transpose(2, 0, 1).astype(np.uint16) * 40 + 300
+    path = tmp_path / "dark_water.tif"
+    # 300 км от осевого меридиана UTM → снимок повёрнут в EPSG:3857, углы превью вне снимка
+    with rasterio.open(
+        path, "w", driver="GTiff", width=3072, height=1024, count=3, dtype="uint16",
+        crs=UTM_CRS, transform=from_origin(300000.0, 5670000.0, 0.5, 0.5),
+    ) as dst:
+        dst.write(data)
+
+    result = detect_scene(detector, path)
+    assert result.tiles_total == 4 and result.tiles_skipped == 1  # пропущен только тайл из нулей
+
+    rgba, _ = render_preview(path, max_size=512)
+    h, w = rgba.shape[:2]
+    assert rgba[h // 2, w // 2, 3] == 255  # тёмная вода непрозрачна
+    assert rgba[0, 0, 3] == 0  # угол за контуром перепроецированного снимка прозрачен
