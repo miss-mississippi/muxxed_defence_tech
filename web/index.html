@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Идентификация объектов на космоснимках</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --muted: #8b949e;
+    --accent: #2f81f7; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #app { display: grid; grid-template-columns: 370px 1fr; height: 100%; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 14px; margin: 0 0 2px; }
+  section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  section h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .grow { flex: 1; min-height: 0; display: flex; flex-direction: column; border-bottom: 0; }
+  .muted { color: var(--muted); }
+  button, select, input[type=file] { font: inherit; color: var(--text); }
+  button { background: #21262d; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  select { background: #0d1117; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #upload { display: flex; gap: 8px; align-items: center; }
+  #upload input { flex: 1; min-width: 0; }
+  #scenes { max-height: 150px; overflow-y: auto; }
+  #scenes li { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+  #scenes li:hover, #scenes li.sel { background: #1f2630; }
+  #scenes li .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  #scenes li .muted { grid-column: 1 / -1; font-size: 12px; }
+  .badge { font-size: 11px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.done { color: var(--ok); border-color: #2ea04366; }
+  .badge.failed { color: var(--bad); border-color: #f8514966; }
+  .badge.processing, .badge.queued { color: var(--warn); border-color: #d2992266; }
+  #classes { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; user-select: none; }
+  .chip input { display: none; }
+  .chip.off { opacity: .4; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .filters { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+  .links { margin-top: 8px; display: flex; gap: 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a[aria-disabled=true] { color: var(--muted); pointer-events: none; }
+  .hint { font-size: 12px; margin: -4px 0 6px; }
+  #detections { overflow-y: auto; flex: 1; }
+  .det { display: grid; grid-template-columns: 10px 1fr 40px 48px auto auto; gap: 8px; align-items: center; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
+  .det:hover { background: #1f2630; }
+  .det.sel { background: #1f3a5f; }
+  .det.confirmed .name { color: var(--ok); }
+  .det.rejected { opacity: .5; }
+  .det.rejected .name { text-decoration: line-through; }
+  .det .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .det .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .det button { padding: 0 7px; line-height: 20px; }
+  .det button.ok:hover { border-color: var(--ok); color: var(--ok); }
+  .det button.no:hover { border-color: var(--bad); color: var(--bad); }
+  #map { height: 100%; background: #0b0f14; }
+  .leaflet-popup-content { font: 13px/1.45 system-ui, sans-serif; margin: 10px 12px; }
+  .pop .row { display: flex; gap: 6px; margin-top: 8px; }
+  .pop select, .pop button { color: #111; background: #fff; border-color: #bbb; }
+  #toast { position: fixed; right: 16px; bottom: 16px; background: #3b1d1d; border: 1px solid var(--bad); padding: 8px 12px; border-radius: 6px; z-index: 1000; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <header>
+      <h1>Идентификация объектов на космоснимках</h1>
+      <div class="muted" id="model">подключение к API…</div>
+    </header>
+    <section>
+      <h2>Загрузка снимка</h2>
+      <form id="upload">
+        <input type="file" id="file" accept=".tif,.tiff,.jpg,.jpeg,.png">
+        <button class="primary" id="upload-btn">Обработать</button>
+      </form>
+    </section>
+    <section>
+      <h2>Сцены</h2>
+      <ul id="scenes"><li class="muted">загрузка…</li></ul>
+    </section>
+    <section>
+      <h2>Фильтры</h2>
+      <div id="classes"></div>
+      <div class="filters">
+        <label for="conf">Уверенность ≥ <span id="conf-val">0.25</span></label>
+        <input type="range" id="conf" min="0" max="1" step="0.05" value="0.25">
+        <label for="status">Статус</label>
+        <select id="status">
+          <option value="">все</option>
+          <option value="pending">не проверено</option>
+          <option value="confirmed">подтверждено</option>
+          <option value="rejected">отклонено</option>
+        </select>
+      </div>
+      <div class="links">
+        <a id="report" target="_blank" aria-disabled="true">Отчёт</a>
+        <a id="geojson" target="_blank" aria-disabled="true">GeoJSON</a>
+        <a href="/docs" target="_blank">API</a>
+      </div>
+    </section>
+    <section class="grow">
+      <h2>Обнаружения <span id="count" class="muted"></span></h2>
+      <div class="hint muted">↑ ↓ — выбор · C — подтвердить · R — отклонить</div>
+      <ul id="detections"></ul>
+    </section>
+  </aside>
+  <main id="map"></main>
+</div>
+<div id="toast" hidden></div>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script>
+// палитра как в ultralytics — цвета совпадают с картинками из scripts/
+const PALETTE = ["042AFF","0BDBEB","F3F3F3","00DFB7","111F68","FF6FDD","FF444F","CCED00","00F344","BD00FF",
+                 "00B4FF","DD00BA","00FFFF","26C000","01FFB3","7D24FF","7B0068","FF1B6C","FC6D2F","A2FF0B"].map(h => "#" + h);
+const STATUS_RU = { pending: "не проверено", confirmed: "подтверждено", rejected: "отклонено" };
+const KZ_VIEW = [[48.0, 67.0], 5];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const state = { model: null, classIds: {}, scene: null, features: [], visibleIds: [], selected: null,
+                hidden: new Set(), map: null, layer: null, shapes: new Map(), pendingOpen: null };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : r.statusText);
+  return body;
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.hidden = true), 4000);
+}
+
+const className = p => p.review_class || p.class_name;
+const colorOf = name => PALETTE[(state.classIds[name] ?? 0) % PALETTE.length];
+
+// ---------- карта ----------
+
+function makeMap(georef) {
+  if (state.map) state.map.remove();
+  state.shapes.clear();
+  state.layer = null;
+  const map = L.map("map", georef ? { maxZoom: 22 } : { crs: L.CRS.Simple, minZoom: -6, maxZoom: 4 });
+  if (georef) {
+    const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 22, maxNativeZoom: 18, attribution: "Подложка © Esri World Imagery" });
+    const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap" });
+    esri.addTo(map);
+    L.control.layers({ "Спутник (Esri)": esri, "OpenStreetMap": osm }, {}, { position: "topright" }).addTo(map);
+    map.setView(...KZ_VIEW);
+  }
+  L.control.scale({ imperial: false }).addTo(map);
+  state.map = map;
+}
+
+function latlngs(f) {
+  if (state.scene.georeferenced) return f.geometry.coordinates[0].slice(0, -1).map(([lon, lat]) => [lat, lon]);
+  return f.properties.polygon_px.map(([x, y]) => [-y, x]);  // CRS.Simple: y вверх
+}
+
+function styleOf(p, selected) {
+  const c = colorOf(className(p));
+  const byStatus = {
+    pending:   { weight: 2, dashArray: "5 4", fillOpacity: 0.06 },
+    confirmed: { weight: 2.5, fillOpacity: 0.25 },
+    rejected:  { weight: 1, color: "#8b949e", opacity: 0.5, fillOpacity: 0 },
+  }[p.review_status];
+  const style = { color: c, fillColor: c, opacity: 0.95, dashArray: null, ...byStatus };
+  return selected ? { ...style, color: "#ffffff", weight: 4, dashArray: null, opacity: 1 } : style;
+}
+
+// ---------- сцены ----------
+
+function sceneStatus(s) {
+  if (s.status === "processing") return `обработка ${Math.round(s.progress * 100)}%`;
+  return { queued: "в очереди", done: "готово", failed: "ошибка" }[s.status] || s.status;
+}
+
+async function loadScenes() {
+  let scenes;
+  try { scenes = await api("/api/scenes"); } catch (e) { toast(e.message); return; }
+  $("scenes").innerHTML = scenes.map(s => {
+    const total = Object.values(s.review || {}).reduce((a, b) => a + b, 0);
+    const checked = (s.review?.confirmed || 0) + (s.review?.rejected || 0);
+    const info = s.status === "done" ? `${total} объектов · проверено ${checked}` : s.status === "failed" ? esc(s.error || "") : "";
+    return `<li data-id="${s.id}" class="${state.scene?.id === s.id ? "sel" : ""}">
+      <span class="name">${esc(s.filename)}</span><span class="badge ${s.status}">${sceneStatus(s)}</span>
+      ${info ? `<span class="muted">${info}</span>` : ""}</li>`;
+  }).join("") || `<li class="muted">пока пусто — загрузите снимок</li>`;
+
+  if (state.pendingOpen) {
+    const s = scenes.find(x => x.id === state.pendingOpen);
+    if (s?.status === "done") { state.pendingOpen = null; openScene(s.id); }
+    if (s?.status === "failed") { state.pendingOpen = null; toast(`Ошибка обработки: ${s.error}`); }
+  }
+  if (scenes.some(s => s.status === "queued" || s.status === "processing")) setTimeout(loadScenes, 1500);
+}
+
+async function openScene(id) {
+  const scene = await api(`/api/scenes/${id}`);
+  if (scene.status !== "done") { state.pendingOpen = id; loadScenes(); return; }
+  state.scene = scene;
+  state.selected = null;
+  state.hidden.clear();
+  makeMap(scene.georeferenced);
+  const bounds = scene.georeferenced ? scene.preview_bounds : [[-scene.height, 0], [0, scene.width]];
+  L.imageOverlay(`/api/scenes/${id}/preview.png`, bounds).addTo(state.map);
+  state.map.fitBounds(bounds);
+  state.features = (await api(`/api/detections?scene_id=${id}`)).features;
+  for (const [a, href] of [["report", `/api/scenes/${id}/report`], ["geojson", `/api/detections?scene_id=${id}`]]) {
+    $(a).href = href; $(a).setAttribute("aria-disabled", "false");
+  }
+  (scene.warnings || []).forEach(toast);
+  loadScenes();
+  render();
+}
+
+// ---------- обнаружения ----------
+
+function visibleFeatures() {
+  const minConf = +$("conf").value, status = $("status").value;
+  return state.features.filter(({ properties: p }) =>
+    p.confidence >= minConf && (!status || p.review_status === status) && !state.hidden.has(className(p)));
+}
+
+function renderClasses() {
+  const counts = {};
+  for (const { properties: p } of state.features) counts[className(p)] = (counts[className(p)] || 0) + 1;
+  $("classes").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([name, n]) =>
+    `<label class="chip ${state.hidden.has(name) ? "off" : ""}"><input type="checkbox" data-class="${esc(name)}">
+     <span class="dot" style="background:${colorOf(name)}"></span>${esc(name)} <span class="muted">${n}</span></label>`).join("");
+}
+
+function render() {
+  if (!state.scene) return;
+  renderClasses();
+  const list = visibleFeatures();
+  state.visibleIds = list.map(f => f.id);
+  $("count").textContent = `${list.length} из ${state.features.length}`;
+
+  if (state.layer) state.layer.remove();
+  state.layer = L.layerGroup().addTo(state.map);
+  state.shapes.clear();
+  for (const f of list) {
+    const shape = L.polygon(latlngs(f), styleOf(f.properties, f.id === state.selected)).addTo(state.layer);
+    shape.on("click", () => select(f.id, false));
+    state.shapes.set(f.id, shape);
+  }
+
+  $("detections").innerHTML = list.map(({ id, properties: p }) => `
+    <li class="det ${p.review_status} ${id === state.selected ? "sel" : ""}" data-id="${id}">
+      <span class="dot" style="background:${colorOf(className(p))}"></span>
+      <span class="name">${esc(className(p))}</span>
+      <span class="num">${p.confidence.toFixed(2)}</span>
+      <span class="num">${p.length_m != null ? p.length_m.toFixed(0) + " м" : ""}</span>
+      <button class="ok" data-act="confirmed" title="Подтвердить (C)">✓</button>
+      <button class="no" data-act="rejected" title="Отклонить (R)">✗</button>
+    </li>`).join("");
+}
+
+function popupHtml(f) {
+  const p = f.properties;
+  const where = p.center_lat != null
+    ? `${p.center_lat.toFixed(6)}, ${p.center_lon.toFixed(6)}<br>${p.length_m.toFixed(1)} × ${p.width_m.toFixed(1)} м · азимут ${p.orientation_deg.toFixed(0)}°`
+    : `пиксели: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
+  const options = Object.keys(state.classIds).map(n => `<option ${n === className(p) ? "selected" : ""}>${esc(n)}</option>`).join("");
+  return `<div class="pop"><b>${esc(className(p))}</b> · ${p.confidence.toFixed(2)} · #${f.id}<br>${where}<br>
+    Статус: ${STATUS_RU[p.review_status]}${p.review_class ? ` (модель: ${esc(p.class_name)})` : ""}
+    <div class="row"><select id="fix-class">${options}</select></div>
+    <div class="row"><button onclick="review(${f.id}, 'confirmed')">✓ Подтвердить</button>
+    <button onclick="review(${f.id}, 'rejected')">✗ Отклонить</button></div></div>`;
+}
+
+function select(id, pan) {
+  const prev = state.selected;
+  state.selected = id;
+  const f = state.features.find(x => x.id === id);
+  if (prev != null && state.shapes.has(prev)) {
+    const pf = state.features.find(x => x.id === prev);
+    state.shapes.get(prev).setStyle(styleOf(pf.properties, false));
+  }
+  document.querySelectorAll(".det.sel").forEach(el => el.classList.remove("sel"));
+  const row = document.querySelector(`.det[data-id="${id}"]`);
+  if (row) { row.classList.add("sel"); row.scrollIntoView({ block: "nearest" }); }
+  const shape = state.shapes.get(id);
+  if (!f || !shape) return;
+  shape.setStyle(styleOf(f.properties, true)).bringToFront();
+  if (pan) state.map.fitBounds(shape.getBounds(), { maxZoom: state.scene.georeferenced ? 19 : 1, padding: [120, 120] });
+  shape.bindPopup(popupHtml(f), { autoPan: !pan }).openPopup();
+}
+
+async function review(id, status) {
+  const f = state.features.find(x => x.id === id);
+  const picker = $("fix-class");
+  const chosen = picker && state.selected === id ? picker.value : className(f.properties);
+  const body = { status, class_name: chosen !== f.properties.class_name ? chosen : null };
+  try {
+    const updated = await api(`/api/detections/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const order = state.visibleIds, next = order[order.indexOf(id) + 1];
+    state.features[state.features.indexOf(f)] = updated;
+    state.map.closePopup();
+    render();
+    loadScenes();
+    const target = next ?? state.visibleIds[state.visibleIds.length - 1];
+    if (target != null) select(target, true);
+  } catch (e) { toast(e.message); }
+}
+window.review = review;
+
+// ---------- события ----------
+
+$("upload").addEventListener("submit", async e => {
+  e.preventDefault();
+  const file = $("file").files[0];
+  if (!file) return toast("Выберите файл снимка");
+  const form = new FormData();
+  form.append("file", file);
+  $("upload-btn").disabled = true;
+  try {
+    const scene = await api("/api/scenes", { method: "POST", body: form });
+    state.pendingOpen = scene.id;
+    $("file").value = "";
+    loadScenes();
+  } catch (err) { toast(err.message); }
+  finally { $("upload-btn").disabled = false; }
+});
+
+$("scenes").addEventListener("click", e => {
+  const li = e.target.closest("li[data-id]");
+  if (li) openScene(+li.dataset.id).catch(err => toast(err.message));
+});
+
+$("classes").addEventListener("change", e => {
+  const name = e.target.dataset.class;
+  state.hidden.has(name) ? state.hidden.delete(name) : state.hidden.add(name);
+  render();
+});
+
+$("conf").addEventListener("input", () => { $("conf-val").textContent = (+$("conf").value).toFixed(2); render(); });
+$("status").addEventListener("change", render);
+
+$("detections").addEventListener("click", e => {
+  const li = e.target.closest(".det");
+  if (!li) return;
+  const act = e.target.dataset.act;
+  act ? review(+li.dataset.id, act) : select(+li.dataset.id, true);
+});
+
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input, select, textarea") || !state.visibleIds.length) return;
+  const ids = state.visibleIds, i = ids.indexOf(state.selected);
+  if (e.key === "ArrowDown") { e.preventDefault(); select(ids[Math.min(i + 1, ids.length - 1)], true); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); select(ids[Math.max(i - 1, 0)], true); }
+  else if (e.code === "KeyC" && state.selected != null) review(state.selected, "confirmed");   // раскладка не важна
+  else if (e.code === "KeyR" && state.selected != null) review(state.selected, "rejected");
+});
+
+// ---------- старт ----------
+
+(async () => {
+  makeMap(true);
+  try {
+    state.model = await api("/api/model");
+    state.classIds = Object.fromEntries(Object.entries(state.model.classes).map(([id, name]) => [name, +id]));
+    $("model").textContent = `${state.model.weights} · ${state.model.device} · ${Object.keys(state.classIds).length} классов`;
+  } catch (e) { $("model").textContent = "API недоступен"; toast(e.message); }
+  loadScenes();
+})();
+</script>
+</body>
+</html>
