@@ -118,6 +118,9 @@ NOTES.md      решения и метрики
 - **DOTA** — датасет исходных весов, <https://captain-whu.github.io/DOTA/>. По условиям авторов —
   только для академического использования.
 - **MAR20** — датасет для дообучения (военные самолёты), CC BY-NC 4.0, <https://gcheng-nwpu.github.io/>.
+- **Демо-снимки** — Maxar Open Data Program, CC BY-NC 4.0, © Maxar Technologies,
+  <https://registry.opendata.aws/maxar-open-data/>. Не хранятся в репозитории, скачиваются
+  `scripts/fetch_demo_scene.py`.
 - **Leaflet 1.9.4** — BSD-2-Clause, <https://leafletjs.com>.
 - Подложки карты: Esri World Imagery и OpenStreetMap — только онлайн, с атрибуцией.
 - **samples/boats.jpg** — пример из документации Ultralytics.
