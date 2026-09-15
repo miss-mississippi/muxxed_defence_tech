@@ -83,7 +83,8 @@ geojson = result.to_geojson()                      # FeatureCollection в WGS84
 .venv/bin/python scripts/eval.py --data data/mar20_yolo/mar20.yaml --weights weights/mar20_s_800.pt --split test
 ```
 
-Обучение на GPU — `notebooks/kaggle_train.ipynb` (Kaggle, T4/P100).
+Обучение на GPU — `notebooks/kaggle_train.ipynb` (Kaggle, T4/P100):
+[открыть в Kaggle](https://www.kaggle.com/kernels/welcome?src=https://github.com/miss-mississippi/muxxed_defence_tech/blob/main/notebooks/kaggle_train.ipynb).
 
 ```bash
 # проверенные экспертом обнаружения из каталога → датасет YOLO-OBB для дообучения
