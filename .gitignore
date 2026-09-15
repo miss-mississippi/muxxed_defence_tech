@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+
+# веса, данные и результаты — не в git
+weights/
+*.pt
+data/
+runs/
+outputs/
