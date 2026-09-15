@@ -307,7 +307,8 @@ def create_app(
 
         @app.get("/", include_in_schema=False)
         def index() -> FileResponse:
-            return FileResponse(WEB_DIR / "index.html")
+            # no-cache: после обновления кода браузер не покажет старую страницу
+            return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 
