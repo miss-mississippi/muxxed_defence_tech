@@ -203,15 +203,16 @@ def create_app(
         return FileResponse(path, media_type="image/png")
 
     @app.get("/api/scenes/{scene_id}/report", response_class=HTMLResponse, tags=["сцены"])
-    def scene_report(scene_id: int) -> str:
-        """Отчёт по сцене (HTML, печатается в PDF из браузера)."""
+    def scene_report(scene_id: int, min_conf: float = Query(0.4, ge=0, le=1)) -> str:
+        """Отчёт по сцене (HTML, печатается в PDF из браузера). По умолчанию уверенность ≥ 0.4, как на карте."""
         scene = get_scene(scene_id)
         with db.session(db_path) as conn:
             rows = conn.execute(
-                "SELECT * FROM detections WHERE scene_id = ? AND review_status != 'rejected' ORDER BY confidence DESC",
-                (scene_id,),
+                "SELECT * FROM detections WHERE scene_id = ? AND review_status != 'rejected' AND confidence >= ? "
+                "ORDER BY confidence DESC",
+                (scene_id, min_conf),
             ).fetchall()
-        return render_report(scene, rows)
+        return render_report(scene, rows, min_conf)
 
     # ---------- обнаружения ----------
 
@@ -311,10 +312,16 @@ def create_app(
     return app
 
 
-def render_report(scene: dict, rows: list) -> str:
+def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
     e = html.escape
     status_ru = {"pending": "не проверено", "confirmed": "подтверждено", "rejected": "отклонено"}
-    counts = "".join(f"<tr><td>{e(k)}</td><td>{v}</td></tr>" for k, v in scene["counts"].items())
+    by_class: dict[str, int] = {}
+    for r in rows:
+        name = r["review_class"] or r["class_name"]
+        by_class[name] = by_class.get(name, 0) + 1
+    counts = "".join(
+        f"<tr><td>{e(k)}</td><td>{v}</td></tr>" for k, v in sorted(by_class.items(), key=lambda kv: -kv[1])
+    )
     review = ", ".join(f"{status_ru.get(k, k)}: {v}" for k, v in scene["review"].items()) or "—"
 
     def row_html(r) -> str:
@@ -348,7 +355,7 @@ th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px sol
 <tr><th>Время обработки, с</th><td>{scene['elapsed_s']}</td></tr>
 <tr><th>Экспертная проверка</th><td>{review}</td></tr>
 </table>
-<h2>Объекты по классам (без отклонённых)</h2>
+<h2>Объекты по классам (уверенность ≥ {min_conf:.2f}, без отклонённых)</h2>
 <table><tr><th>Класс</th><th>Количество</th></tr>{counts}</table>
 <img src="/api/scenes/{scene['id']}/preview.png" alt="превью сцены">
 <h2>Перечень обнаружений</h2>

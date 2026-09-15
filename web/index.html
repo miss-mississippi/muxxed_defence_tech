@@ -90,8 +90,8 @@
       <h2>Фильтры</h2>
       <div id="classes"></div>
       <div class="filters">
-        <label for="conf">Уверенность ≥ <span id="conf-val">0.25</span></label>
-        <input type="range" id="conf" min="0" max="1" step="0.05" value="0.25">
+        <label for="conf">Уверенность ≥ <span id="conf-val">0.40</span></label>
+        <input type="range" id="conf" min="0" max="1" step="0.05" value="0.4">
         <label for="status">Статус</label>
         <select id="status">
           <option value="">все</option>
@@ -219,9 +219,7 @@ async function openScene(id) {
   L.imageOverlay(`/api/scenes/${id}/preview.png`, bounds).addTo(state.map);
   state.map.fitBounds(bounds);
   state.features = (await api(`/api/detections?scene_id=${id}`)).features;
-  for (const [a, href] of [["report", `/api/scenes/${id}/report`], ["geojson", `/api/detections?scene_id=${id}`]]) {
-    $(a).href = href; $(a).setAttribute("aria-disabled", "false");
-  }
+  ["report", "geojson"].forEach(a => $(a).setAttribute("aria-disabled", "false"));
   (scene.warnings || []).forEach(toast);
   loadScenes();
   render();
@@ -245,6 +243,9 @@ function renderClasses() {
 
 function render() {
   if (!state.scene) return;
+  const minConf = $("conf").value;  // отчёт и GeoJSON — с тем же порогом, что на карте
+  $("report").href = `/api/scenes/${state.scene.id}/report?min_conf=${minConf}`;
+  $("geojson").href = `/api/detections?scene_id=${state.scene.id}&min_conf=${minConf}`;
   renderClasses();
   const list = visibleFeatures();
   state.visibleIds = list.map(f => f.id);
