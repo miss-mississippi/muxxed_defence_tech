@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS detections (
     scene_id        INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
     class_id        INTEGER NOT NULL,
     class_name      TEXT NOT NULL,
+    model           TEXT,                              -- какая модель нашла объект
     confidence      REAL NOT NULL,
     polygon_px      TEXT NOT NULL,                     -- JSON [[x, y] x4], пиксели сцены
     geometry        TEXT,                              -- JSON GeoJSON Polygon (WGS84) или NULL
@@ -56,7 +57,7 @@ CREATE INDEX IF NOT EXISTS idx_detections_center ON detections(center_lon, cente
 """
 
 DETECTION_FIELDS = (
-    "id", "scene_id", "class_id", "class_name", "confidence", "cx", "cy", "w", "h", "angle",
+    "id", "scene_id", "class_id", "class_name", "model", "confidence", "cx", "cy", "w", "h", "angle",
     "center_lon", "center_lat", "length_m", "width_m", "orientation_deg",
     "review_status", "review_class", "review_comment", "reviewed_at",
 )
@@ -67,6 +68,10 @@ def init(path: Path) -> None:
     with session(path) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        try:  # каталог, созданный до появления нескольких моделей
+            conn.execute("ALTER TABLE detections ADD COLUMN model TEXT")
+        except sqlite3.OperationalError:
+            pass
 
 
 @contextmanager

@@ -18,8 +18,9 @@ from rasterio.windows import Window
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
-from .merge import merge_tiles
+from .merge import merge_tiles, suppress_cross_model
 from .model import Detector
+from .registry import ModelRegistry
 from .schema import Detection
 
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
@@ -140,7 +141,7 @@ def to_uint8(data: np.ndarray, limits: tuple[np.ndarray, np.ndarray] | None) -> 
 
 
 def detect_scene(
-    detector: Detector,
+    models: Detector | ModelRegistry,
     path: str | Path,
     tile: int = 1024,
     overlap: int = 200,
@@ -150,6 +151,7 @@ def detect_scene(
     progress: Callable[[int, int], None] | None = None,
 ) -> SceneResult:
     t0 = time.perf_counter()
+    registry = models if isinstance(models, ModelRegistry) else ModelRegistry.single(models)
     with open_raster(path) as src:
         georef = is_georeferenced(src)
         bands = bands or rgb_bands(src)
@@ -171,12 +173,13 @@ def detect_scene(
                 images.append(to_uint8(raw, limits))
                 kept.append((x, y, w, h))
             if images:
-                results = detector.predict_batch(images, [(x, y) for x, y, _, _ in kept], rgb=True)
+                results = registry.predict_batch(images, [(x, y) for x, y, _, _ in kept], rgb=True)
                 tiles.extend(zip(kept, results))
             if progress:
                 progress(min(start + batch, len(windows)), len(windows))
 
         detections = merge_tiles(tiles, (src.width, src.height), ios_threshold)
+        detections = suppress_cross_model(detections, registry.priorities, ios_threshold)
         detections.sort(key=lambda d: -d.confidence)
         result = SceneResult(
             path=str(path),

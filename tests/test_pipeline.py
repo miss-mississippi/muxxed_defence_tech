@@ -5,7 +5,17 @@ from pyproj import Transformer
 from rasterio.transform import from_origin
 
 from conftest import SAMPLE, UTM_CRS, UTM_ORIGIN, UTM_PIXEL_M
-from detector import Detection, detect_scene, merge_tiles, render_preview, tile_windows
+from detector import (
+    DEFAULT_WEIGHTS,
+    Detection,
+    ModelRegistry,
+    ModelSpec,
+    detect_scene,
+    merge_tiles,
+    render_preview,
+    suppress_cross_model,
+    tile_windows,
+)
 
 
 def box(x0, y0, x1, y1, cls=1, conf=0.8) -> Detection:
@@ -72,6 +82,17 @@ def test_scene_geojson_matches_affine(detector, utm_uint16_tif):
             assert np.abs(expected - corner).max(axis=1).min() < 2e-7
         assert west <= props["center_lon"] <= east and south <= props["center_lat"] <= north
         assert props["length_m"] == pytest.approx(max(props["w"], props["h"]) * UTM_PIXEL_M, rel=0.02)
+
+
+def test_two_models_tag_and_deduplicate(boats_rgb):
+    # две «разные» модели из одних весов: каждый объект находится дважды
+    registry = ModelRegistry([ModelSpec("general", DEFAULT_WEIGHTS, 0), ModelSpec("special", DEFAULT_WEIGHTS, 1)])
+    raw = registry.predict(boats_rgb, rgb=True)
+    assert {d.model for d in raw} == {"general", "special"}
+
+    merged = suppress_cross_model(raw, registry.priorities)
+    assert len(merged) == len(raw) // 2
+    assert {d.model for d in merged} == {"special"}  # выигрывает приоритетная модель
 
 
 def test_scene_without_georeference(detector):

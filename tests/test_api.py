@@ -13,9 +13,11 @@ def client(tmp_path_factory):
 
 
 def test_health_and_model(client):
-    assert client.get("/api/health").json()["status"] == "ok"
-    model = client.get("/api/model").json()
-    assert model["classes"]["1"] == "ship"
+    health = client.get("/api/health").json()
+    assert health["status"] == "ok" and health["models"] == ["dota"]
+    info = client.get("/api/model").json()
+    assert [m["name"] for m in info["models"]] == ["dota"]
+    assert info["models"][0]["classes"]["1"] == "ship"
 
 
 def test_index_page(client):
@@ -37,6 +39,9 @@ def test_scene_catalog_and_review_flow(client, utm_uint16_tif):
     features = client.get("/api/detections", params={"scene_id": scene_id}).json()["features"]
     assert len(features) == sum(scene["counts"].values())
     assert all(f["geometry"]["type"] == "Polygon" for f in features)
+    assert all(f["properties"]["model"] == "dota" for f in features)
+    assert len(client.get("/api/detections", params={"model": "dota"}).json()["features"]) == len(features)
+    assert client.get("/api/detections", params={"model": "mar20"}).json()["features"] == []
     confident = client.get("/api/detections", params={"scene_id": scene_id, "min_conf": 0.8}).json()["features"]
     assert 0 < len(confident) < len(features)
 

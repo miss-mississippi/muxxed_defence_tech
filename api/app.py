@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from detector import DEFAULT_WEIGHTS, Detector, detect_scene, render_preview
+from detector import DEFAULT_WEIGHTS, Detector, ModelRegistry, detect_scene, render_preview
 
 from . import db
 
@@ -46,11 +46,14 @@ def create_app(
     weights: Path | None = None,
     device: str | None = None,
     conf: float | None = None,
+    models: str | None = None,
 ) -> FastAPI:
     data_dir = Path(data_dir or os.environ.get("DATA_DIR", ROOT / "data"))
     weights = Path(weights or os.environ.get("WEIGHTS", DEFAULT_WEIGHTS))
     device = device or os.environ.get("DEVICE") or None
     conf = conf if conf is not None else float(os.environ.get("CONF", 0.25))
+    # MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt" — порядок задаёт приоритет
+    models = models if models is not None else os.environ.get("MODELS")
     scenes_dir, previews_dir, db_path = data_dir / "scenes", data_dir / "previews", data_dir / "catalog.sqlite"
     detect_lock = threading.Lock()  # одна модель на процесс — сцены обрабатываются по очереди
 
@@ -59,7 +62,11 @@ def create_app(
         scenes_dir.mkdir(parents=True, exist_ok=True)
         previews_dir.mkdir(parents=True, exist_ok=True)
         db.init(db_path)
-        app.state.detector = Detector(weights, device=device, conf=conf)
+        app.state.models = (
+            ModelRegistry.from_env(models, device=device, conf=conf)
+            if models
+            else ModelRegistry.single(Detector(weights, device=device, conf=conf, name="dota"))
+        )
         yield
 
     app = FastAPI(
@@ -69,8 +76,8 @@ def create_app(
         lifespan=lifespan,
     )
 
-    def detector() -> Detector:
-        return app.state.detector
+    def registry() -> ModelRegistry:
+        return app.state.models
 
     def get_scene_row(conn, scene_id: int):
         row = conn.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
@@ -97,7 +104,7 @@ def create_app(
             with db.session(db_path) as conn:
                 conn.execute("UPDATE scenes SET status = 'processing' WHERE id = ?", (scene_id,))
             with detect_lock:
-                result = detect_scene(detector(), path, progress=progress)
+                result = detect_scene(registry(), path, progress=progress)
             rgba, preview_bounds = render_preview(path)
             cv2.imwrite(str(previews_dir / f"{scene_id}.png"), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
 
@@ -105,16 +112,16 @@ def create_app(
             for f in result.features:
                 p = f["properties"]
                 rows.append((
-                    scene_id, p["class_id"], p["class_name"], p["confidence"], json.dumps(p["polygon_px"]),
-                    json.dumps(f["geometry"]) if f["geometry"] else None,
+                    scene_id, p["class_id"], p["class_name"], p.get("model"), p["confidence"],
+                    json.dumps(p["polygon_px"]), json.dumps(f["geometry"]) if f["geometry"] else None,
                     p["cx"], p["cy"], p["w"], p["h"], p["angle"],
                     p.get("center_lon"), p.get("center_lat"), p.get("length_m"), p.get("width_m"), p.get("orientation_deg"),
                 ))
             with db.session(db_path) as conn:
                 conn.executemany(
-                    """INSERT INTO detections (scene_id, class_id, class_name, confidence, polygon_px, geometry,
+                    """INSERT INTO detections (scene_id, class_id, class_name, model, confidence, polygon_px, geometry,
                            cx, cy, w, h, angle, center_lon, center_lat, length_m, width_m, orientation_deg)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     rows,
                 )
                 conn.execute(
@@ -126,7 +133,7 @@ def create_app(
                         json.dumps(result.bounds_wgs84) if result.bounds_wgs84 else None,
                         json.dumps(preview_bounds) if preview_bounds else None,
                         result.gsd_m, result.tiles_total, result.tiles_skipped, result.elapsed_s,
-                        detector().weights.name, json.dumps(result.warnings, ensure_ascii=False), scene_id,
+                        " + ".join(registry().detectors), json.dumps(result.warnings, ensure_ascii=False), scene_id,
                     ),
                 )
         except Exception as exc:  # сцена помечается failed, сервер продолжает работать
@@ -137,19 +144,31 @@ def create_app(
 
     @app.get("/api/health", tags=["служебное"])
     def health() -> dict:
-        d = detector()
-        return {"status": "ok", "weights": d.weights.name, "device": d.device, "classes": len(d.names)}
+        r = registry()
+        return {
+            "status": "ok",
+            "models": list(r.detectors),
+            "device": r.device,
+            "classes": len(r.all_class_names()),
+        }
 
     @app.get("/api/model", tags=["служебное"])
     def model_info() -> dict:
-        d = detector()
+        r = registry()
         return {
-            "weights": d.weights.name,
             "architecture": "YOLO11-OBB (Ultralytics, AGPL-3.0)",
-            "device": d.device,
-            "imgsz": d.imgsz,
-            "conf": d.conf,
-            "classes": {int(k): v for k, v in d.names.items()},
+            "device": r.device,
+            "imgsz": r.imgsz,
+            "conf": r.conf,
+            "models": [
+                {
+                    "name": name,
+                    "weights": det.weights.name,
+                    "priority": r.specs[name].priority,
+                    "classes": {int(k): v for k, v in det.names.items()},
+                }
+                for name, det in r.detectors.items()
+            ],
         }
 
     # ---------- сцены ----------
@@ -220,6 +239,7 @@ def create_app(
     def list_detections(
         scene_id: int | None = None,
         class_name: list[str] | None = Query(None, description="можно несколько"),
+        model: list[str] | None = Query(None, description="имена моделей"),
         min_conf: float = Query(0.0, ge=0, le=1),
         status: list[ReviewStatus] | None = Query(None),
         bbox: str | None = Query(None, description="west,south,east,north (WGS84)"),
@@ -234,6 +254,9 @@ def create_app(
         if class_name:
             where.append(f"COALESCE(review_class, class_name) IN ({','.join('?' * len(class_name))})")
             params += class_name
+        if model:
+            where.append(f"model IN ({','.join('?' * len(model))})")
+            params += model
         if status:
             where.append(f"review_status IN ({','.join('?' * len(status))})")
             params += status
@@ -260,7 +283,7 @@ def create_app(
     @app.patch("/api/detections/{detection_id}", tags=["обнаружения"])
     def review_detection(detection_id: int, review: Review) -> dict:
         """Экспертная проверка: подтвердить / отклонить / исправить класс."""
-        if review.class_name is not None and review.class_name not in detector().names.values():
+        if review.class_name is not None and review.class_name not in registry().all_class_names():
             raise HTTPException(422, f"неизвестный класс {review.class_name}")
         reviewed_at = None if review.status == "pending" else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with db.session(db_path) as conn:
@@ -295,7 +318,7 @@ def create_app(
         with tempfile.TemporaryDirectory() as tmp:
             path = save_upload(file, Path(tmp))
             with detect_lock:
-                result = detect_scene(detector(), path)
+                result = detect_scene(registry(), path)
         geojson = result.to_geojson()
         geojson["scene"]["path"] = file.filename
         return geojson
@@ -330,7 +353,8 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
         size = "" if r["length_m"] is None else f"{r['length_m']:.1f} × {r['width_m']:.1f}"
         azimuth = "" if r["orientation_deg"] is None else f"{r['orientation_deg']:.0f}°"
         return (
-            f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td><td>{r['confidence']:.2f}</td>"
+            f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td>"
+            f"<td>{e(r['model'] or '')}</td><td>{r['confidence']:.2f}</td>"
             f"<td>{center}</td><td>{size}</td><td>{azimuth}</td><td>{status_ru[r['review_status']]}</td></tr>"
         )
 
@@ -360,7 +384,7 @@ th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px sol
 <table><tr><th>Класс</th><th>Количество</th></tr>{counts}</table>
 <img src="/api/scenes/{scene['id']}/preview.png" alt="превью сцены">
 <h2>Перечень обнаружений</h2>
-<table><tr><th>ID</th><th>Класс</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
+<table><tr><th>ID</th><th>Класс</th><th>Модель</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
 </body></html>"""
 
 

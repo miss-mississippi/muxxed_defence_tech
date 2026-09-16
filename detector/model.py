@@ -33,6 +33,7 @@ class Detector:
         imgsz: int = 1024,
         conf: float = 0.25,
         iou: float = 0.7,
+        name: str | None = None,
     ):
         weights = Path(weights)
         if not weights.exists():
@@ -40,6 +41,7 @@ class Detector:
             weights.parent.mkdir(parents=True, exist_ok=True)
             attempt_download_asset(weights)
         self.weights = weights
+        self.name = name or weights.stem  # попадает в поле model каждой детекции
         self.model = YOLO(str(weights), task="obb")
         self.names: dict[int, str] = self.model.names
         self.device = device or pick_device()
@@ -115,6 +117,7 @@ class Detector:
                     w=round(float(w), 2),
                     h=round(float(h), 2),
                     angle=round(float(angle), 4),
+                    model=self.name,
                 )
             )
         return detections

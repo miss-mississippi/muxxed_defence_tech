@@ -26,6 +26,8 @@ class Detection:
     w: float
     h: float
     angle: float
+    # имя модели: общая DOTA или дообученная по типам техники (см. detector/registry.py)
+    model: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

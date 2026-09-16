@@ -42,6 +42,13 @@ python3 -m venv .venv
 Веса `yolo11s-obb.pt` скачиваются автоматически в `weights/` при первом запуске.
 Сервер настраивается переменными `WEIGHTS`, `DEVICE` (`cpu`/`mps`/`0`), `CONF`, `DATA_DIR`.
 
+Несколько моделей сразу (общая по DOTA + дообученная по типам техники), порядок задаёт приоритет
+при наложении объектов:
+
+```bash
+MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt" .venv/bin/uvicorn api.app:app
+```
+
 ## REST API
 
 | Метод | Путь | Назначение |

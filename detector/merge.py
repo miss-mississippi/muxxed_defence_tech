@@ -62,9 +62,40 @@ def merge_tiles(
         keep.append(i)
         for j in tree.query(polys[i]):
             j = int(j)
-            if j == i or suppressed[j] or tile_ids[j] == tile_ids[i] or dets[j].class_id != dets[i].class_id:
+            same_class = (dets[j].model, dets[j].class_id) == (dets[i].model, dets[i].class_id)
+            if j == i or suppressed[j] or tile_ids[j] == tile_ids[i] or not same_class:
                 continue
             smaller = min(polys[i].area, polys[j].area)
             if smaller > 0 and polys[i].intersection(polys[j]).area / smaller >= ios_threshold:
                 suppressed[j] = True
     return [dets[i] for i in sorted(keep)]
+
+
+def suppress_cross_model(
+    detections: list[Detection], priorities: dict[str, int], ios_threshold: float = 0.6
+) -> list[Detection]:
+    """Один объект, найденный разными моделями (общая DOTA — «plane», специализированная — «SU-34»),
+    оставляем один раз: побеждает модель с большим приоритетом, при равном — уверенность.
+    Классы не сравниваем: у моделей разные наборы классов, сопоставлять их нечем."""
+    if len(detections) < 2 or len(priorities) < 2:
+        return detections
+    polys = [Polygon(d.polygon).buffer(0) for d in detections]
+    tree = STRtree(polys)
+    order = sorted(
+        range(len(detections)),
+        key=lambda i: (-priorities.get(detections[i].model, 0), -detections[i].confidence),
+    )
+    suppressed = [False] * len(detections)
+    keep = []
+    for i in order:
+        if suppressed[i]:
+            continue
+        keep.append(i)
+        for j in tree.query(polys[i]):
+            j = int(j)
+            if j == i or suppressed[j] or detections[j].model == detections[i].model:
+                continue
+            smaller = min(polys[i].area, polys[j].area)
+            if smaller > 0 and polys[i].intersection(polys[j]).area / smaller >= ios_threshold:
+                suppressed[j] = True
+    return [detections[i] for i in sorted(keep)]

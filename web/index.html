@@ -278,7 +278,8 @@ function popupHtml(f) {
     : `пиксели: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
   const options = Object.keys(state.classIds).map(n => `<option ${n === className(p) ? "selected" : ""}>${esc(n)}</option>`).join("");
   return `<div class="pop"><b>${esc(className(p))}</b> · ${p.confidence.toFixed(2)} · #${f.id}<br>${where}<br>
-    Статус: ${STATUS_RU[p.review_status]}${p.review_class ? ` (модель: ${esc(p.class_name)})` : ""}
+    Модель: ${esc(p.model || "—")}<br>
+    Статус: ${STATUS_RU[p.review_status]}${p.review_class ? ` (модель дала: ${esc(p.class_name)})` : ""}
     <div class="row"><select id="fix-class">${options}</select></div>
     <div class="row"><button onclick="review(${f.id}, 'confirmed')">✓ Подтвердить</button>
     <button onclick="review(${f.id}, 'rejected')">✗ Отклонить</button></div></div>`;
@@ -377,8 +378,12 @@ document.addEventListener("keydown", e => {
   makeMap(true);
   try {
     state.model = await api("/api/model");
-    state.classIds = Object.fromEntries(Object.entries(state.model.classes).map(([id, name]) => [name, +id]));
-    $("model").textContent = `${state.model.weights} · ${state.model.device} · ${Object.keys(state.classIds).length} классов`;
+    state.classIds = {};
+    for (const m of state.model.models) {
+      for (const [id, name] of Object.entries(m.classes)) if (!(name in state.classIds)) state.classIds[name] = +id;
+    }
+    const names = state.model.models.map(m => m.name).join(" + ");
+    $("model").textContent = `${names} · ${state.model.device} · ${Object.keys(state.classIds).length} классов`;
   } catch (e) { $("model").textContent = "API недоступен"; toast(e.message); }
   loadScenes();
 })();
