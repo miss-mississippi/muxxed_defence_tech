@@ -21,7 +21,7 @@ from typing import Literal
 
 import cv2
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -213,6 +213,18 @@ def create_app(
             "counts": {c["name"]: c["n"] for c in classes},
             "review": {r["review_status"]: r["n"] for r in review},
         }
+
+    @app.delete("/api/scenes/{scene_id}", status_code=204, tags=["сцены"])
+    def delete_scene(scene_id: int) -> Response:
+        """Удалить сцену вместе с её обнаружениями, файлом снимка и превью."""
+        with db.session(db_path) as conn:
+            row = get_scene_row(conn, scene_id)
+            scene_path = Path(row["path"])
+            conn.execute("DELETE FROM detections WHERE scene_id = ?", (scene_id,))
+            conn.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
+        scene_path.unlink(missing_ok=True)
+        (previews_dir / f"{scene_id}.png").unlink(missing_ok=True)
+        return Response(status_code=204)
 
     @app.get("/api/scenes/{scene_id}/preview.png", tags=["сцены"])
     def scene_preview(scene_id: int) -> FileResponse:

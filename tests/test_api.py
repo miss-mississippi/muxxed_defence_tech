@@ -75,6 +75,17 @@ def test_scene_catalog_and_review_flow(client, utm_uint16_tif):
     assert report.status_code == 200 and "marina.tif" in report.text and "подтверждено: 1" in report.text
 
 
+def test_delete_scene_removes_its_detections(client, utm_uint16_tif):
+    with utm_uint16_tif.open("rb") as f:
+        scene_id = client.post("/api/scenes", files={"file": ("temp.tif", f, "image/tiff")}).json()["id"]
+    assert client.get(f"/api/scenes/{scene_id}").json()["status"] == "done"
+
+    assert client.delete(f"/api/scenes/{scene_id}").status_code == 204
+    assert client.get(f"/api/scenes/{scene_id}").status_code == 404
+    assert client.get("/api/detections", params={"scene_id": scene_id}).json()["features"] == []
+    assert client.delete(f"/api/scenes/{scene_id}").status_code == 404
+
+
 def test_upload_rejects_unknown_format(client):
     r = client.post("/api/scenes", files={"file": ("notes.txt", b"hello", "text/plain")})
     assert r.status_code == 415
