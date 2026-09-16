@@ -107,6 +107,9 @@ dota8 взят из train DOTA, предобученная модель эти �
 - Смысл для ТЗ: DOTA даёт «выявление» (plane/ship/vehicle…), MAR20 — «распознавание и классификация»
   по типам военной авиации.
 - Формат: XML с `robndbox` (4 угла) → `scripts/prepare_mar20.py` → YOLO-OBB.
+- 16.09: в копии MAR20 на Kaggle (`khlaifiabilel/military-aircraft-recognition-dataset`, 1.2 ГБ,
+  структура как в оригинале) поле `size` в OBB-XML нулевое — конвертер падал делением на ноль
+  при нормировке координат. Теперь размер берётся из самого JPEG, если в XML его нет. Есть тест.
 - Зеркало на Hugging Face (Alex5666/Military-Aircraft-Recognition-dataset) **неполное: 100 снимков
   из 3842** (проверено через API 15.09) — для обучения не годится.
 - Полный архив — официальные OneDrive/Baidu на gcheng-nwpu.github.io; на Kaggle загрузить как
