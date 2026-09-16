@@ -10,6 +10,7 @@ from detector import (
     Detection,
     ModelRegistry,
     ModelSpec,
+    apply_refinement,
     detect_scene,
     merge_tiles,
     render_preview,
@@ -18,11 +19,11 @@ from detector import (
 )
 
 
-def box(x0, y0, x1, y1, cls=1, conf=0.8) -> Detection:
+def box(x0, y0, x1, y1, cls=1, conf=0.8, model="") -> Detection:
     return Detection(
         class_id=cls, class_name="ship", confidence=conf,
         polygon=[[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-        cx=(x0 + x1) / 2, cy=(y0 + y1) / 2, w=x1 - x0, h=y1 - y0, angle=0.0,
+        cx=(x0 + x1) / 2, cy=(y0 + y1) / 2, w=x1 - x0, h=y1 - y0, angle=0.0, model=model,
     )
 
 
@@ -50,6 +51,28 @@ def test_merge_keeps_overlaps_inside_one_tile_and_other_classes():
     tile = ((0, 0, 1024, 1024), [box(100, 100, 200, 140), box(110, 100, 210, 140), box(100, 100, 200, 140, cls=7)])
     other = ((824, 0, 1024, 1024), [])
     assert len(merge_tiles([tile, other], scene_size=(1848, 1024))) == 3
+
+
+def test_refinement_keeps_types_only_where_general_model_sees_object():
+    plane = box(100, 100, 200, 140, cls=0, conf=0.80, model="dota")
+    typed = box(105, 100, 205, 140, cls=3, conf=0.70, model="mar20")   # тот же самолёт
+    ghost = box(900, 900, 960, 950, cls=16, conf=0.71, model="mar20")  # кран в порту
+
+    kept = apply_refinement([plane, typed, ghost], {"mar20"})
+    assert kept == [plane, typed]
+    final = suppress_cross_model(kept, {"dota": 0, "mar20": 1})
+    assert [(d.model, d.class_id) for d in final] == [("mar20", 3)]
+
+
+def test_cross_tile_merge_ignores_class_for_type_models():
+    # один самолёт на перекрытии: из одного тайла C-17, из соседнего C-5
+    left = ((0, 0, 1024, 1024), [box(900, 100, 1000, 140, cls=2, conf=0.77, model="mar20")])
+    right = ((824, 0, 1024, 1024), [box(900, 100, 1000, 140, cls=3, conf=0.55, model="mar20")])
+    scene = (1848, 1024)
+
+    assert len(merge_tiles([left, right], scene)) == 2  # по умолчанию классы разные — не склеиваем
+    merged = merge_tiles([left, right], scene, agnostic_models={"mar20"})
+    assert len(merged) == 1 and merged[0].class_id == 2  # остаётся более уверенная
 
 
 def test_predict_offset_and_rgb(detector, boats_rgb):

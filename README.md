@@ -46,8 +46,11 @@ python3 -m venv .venv
 при наложении объектов:
 
 ```bash
-MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt" .venv/bin/uvicorn api.app:app
+MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt:refine" .venv/bin/uvicorn api.app:app
 ```
+
+Суффикс `:refine` — модель только уточняет тип там, где объект нашла общая модель. Без него
+модель типов самолётов «узнаёт» их в портовых кранах и контейнерах.
 
 ## REST API
 

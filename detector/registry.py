@@ -21,6 +21,11 @@ class ModelSpec:
     name: str
     weights: Path
     priority: int = 0  # при наложении объектов выигрывает модель с большим приоритетом
+    # уточняющая модель: её детекции живут только там, где объект нашла и общая модель.
+    # Без этого модель типов самолётов «узнаёт» их в кранах и контейнерах порта.
+    refine_only: bool = False
+    # NMS без учёта класса: один объект не может быть двух типов сразу (C-5 и C-17 на одном самолёте)
+    agnostic_nms: bool = False
 
 
 class ModelRegistry:
@@ -39,7 +44,10 @@ class ModelRegistry:
             raise ValueError("нужна хотя бы одна модель")
         self.specs = {s.name: s for s in specs}
         self.detectors = {
-            s.name: Detector(s.weights, device=device, imgsz=imgsz, conf=conf, iou=iou, name=s.name)
+            s.name: Detector(
+                s.weights, device=device, imgsz=imgsz, conf=conf, iou=iou, name=s.name,
+                agnostic_nms=s.agnostic_nms,
+            )
             for s in specs
         }
 
@@ -55,16 +63,23 @@ class ModelRegistry:
     def from_env(
         cls, value: str | None = None, device: str | None = None, imgsz: int = 1024, conf: float = 0.25
     ) -> "ModelRegistry":
-        """value: "dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt".
+        """value: "dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt:refine".
         Порядок задаёт приоритет: следующая модель важнее предыдущей.
+        Суффикс `:refine` — модель только уточняет тип там, где объект нашла общая модель.
         Пусто — одна предобученная модель DOTA."""
         specs = []
         for priority, item in enumerate(v.strip() for v in (value or "").split(",") if v.strip()):
             name, _, path = item.partition("=")
             if not path:
                 raise ValueError(f"ожидается имя=путь, получено {item!r}")
-            weights = Path(path.strip())
-            specs.append(ModelSpec(name.strip(), weights if weights.is_absolute() else ROOT / weights, priority))
+            path, refine = path.strip(), False
+            if path.endswith(":refine"):
+                path, refine = path[: -len(":refine")], True
+            weights = Path(path)
+            specs.append(ModelSpec(
+                name.strip(), weights if weights.is_absolute() else ROOT / weights, priority,
+                refine_only=refine, agnostic_nms=refine,
+            ))
         if not specs:
             specs = [ModelSpec("dota", DEFAULT_WEIGHTS)]
         return cls(specs, device=device, imgsz=imgsz, conf=conf)
@@ -72,6 +87,14 @@ class ModelRegistry:
     @property
     def priorities(self) -> dict[str, int]:
         return {name: spec.priority for name, spec in self.specs.items()}
+
+    @property
+    def refine_only(self) -> set[str]:
+        return {name for name, spec in self.specs.items() if spec.refine_only}
+
+    @property
+    def agnostic_models(self) -> set[str]:
+        return {name for name, spec in self.specs.items() if spec.agnostic_nms}
 
     @property
     def device(self) -> str:

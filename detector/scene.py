@@ -18,7 +18,7 @@ from rasterio.windows import Window
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
-from .merge import merge_tiles, suppress_cross_model
+from .merge import apply_refinement, merge_tiles, suppress_cross_model
 from .model import Detector
 from .registry import ModelRegistry
 from .schema import Detection
@@ -178,7 +178,10 @@ def detect_scene(
             if progress:
                 progress(min(start + batch, len(windows)), len(windows))
 
-        detections = merge_tiles(tiles, (src.width, src.height), ios_threshold)
+        detections = merge_tiles(
+            tiles, (src.width, src.height), ios_threshold, agnostic_models=registry.agnostic_models
+        )
+        detections = apply_refinement(detections, registry.refine_only, ios_threshold)
         detections = suppress_cross_model(detections, registry.priorities, ios_threshold)
         detections.sort(key=lambda d: -d.confidence)
         result = SceneResult(

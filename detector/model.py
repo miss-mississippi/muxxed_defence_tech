@@ -34,6 +34,7 @@ class Detector:
         conf: float = 0.25,
         iou: float = 0.7,
         name: str | None = None,
+        agnostic_nms: bool = False,
     ):
         weights = Path(weights)
         if not weights.exists():
@@ -48,6 +49,7 @@ class Detector:
         self.imgsz = imgsz
         self.conf = conf
         self.iou = iou
+        self.agnostic_nms = agnostic_nms  # для моделей типов техники: объект не бывает двух типов сразу
         self.last_speed: dict[str, float] = {}
 
     def predict(
@@ -76,6 +78,7 @@ class Detector:
             imgsz=self.imgsz,
             conf=self.conf,
             iou=self.iou,
+            agnostic_nms=self.agnostic_nms,
             device=self.device,
             verbose=False,
         )
