@@ -158,7 +158,12 @@ function makeMap(georef) {
     const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap" });
     esri.addTo(map);
-    L.control.layers({ "Спутник (Esri)": esri, "OpenStreetMap": osm }, {}, { position: "topright" }).addTo(map);
+    // подложки тянутся из интернета; в закрытом контуре выбирается «без подложки»
+    const blank = L.layerGroup();
+    L.control.layers(
+      { "Спутник (Esri)": esri, "OpenStreetMap": osm, "Без подложки (офлайн)": blank },
+      {}, { position: "topright" },
+    ).addTo(map);
     map.setView(...KZ_VIEW);
   }
   L.control.scale({ imperial: false }).addTo(map);
