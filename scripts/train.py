@@ -14,12 +14,34 @@ from pathlib import Path
 
 from ultralytics import YOLO
 from ultralytics.data.utils import check_det_dataset
+from ultralytics.utils import LOGGER
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from detector.model import DEFAULT_WEIGHTS, pick_device  # noqa: E402
 from scripts.eval import evaluate, to_markdown  # noqa: E402
+
+
+def noise_augmentations(probability: float) -> list | None:
+    """Набор аугментаций с гауссовым шумом (штатный параметр ultralytics `augmentations`).
+
+    Замер устойчивости показал единственную реальную слабость модели — сенсорный шум
+    (mAP50 0.900 → 0.371 при σ=15): в стандартном наборе аугментаций ultralytics шума нет.
+    Повторяем стандартный набор и добавляем к нему GaussNoise.
+    """
+    try:
+        import albumentations as A
+    except ImportError:  # необязательная зависимость: без неё обучение идёт, просто без шума
+        LOGGER.warning("albumentations не установлена, обучение пойдёт без шумовой аугментации")
+        return None
+    return [
+        A.Blur(p=0.01),
+        A.MedianBlur(p=0.01),
+        A.ToGray(p=0.01),
+        A.CLAHE(p=0.01),
+        A.GaussNoise(p=probability),
+    ]
 
 
 def main() -> None:
@@ -37,9 +59,16 @@ def main() -> None:
     p.add_argument("--freeze", type=int, default=0, help="заморозить первые N слоёв")
     p.add_argument("--fraction", type=float, default=1.0, help="доля train для быстрых прогонов")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--noise", type=float, default=0.0, help="вероятность гауссова шума в аугментациях")
     args = p.parse_args()
 
     device = args.device or pick_device()
+    extra = {}
+    if args.noise > 0:
+        augmentations = noise_augmentations(args.noise)
+        if augmentations:
+            extra["augmentations"] = augmentations
+            LOGGER.info(f"аугментации: GaussNoise(p={args.noise}) добавлен к стандартному набору")
     model = YOLO(args.weights, task="obb")
     model.train(
         data=args.data,
@@ -63,6 +92,7 @@ def main() -> None:
         fliplr=0.5,
         degrees=args.degrees,
         plots=True,
+        **extra,
     )
 
     best = Path(model.trainer.best)
