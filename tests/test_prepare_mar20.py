@@ -36,6 +36,15 @@ def mar20_root(tmp_path):
     return root
 
 
+def test_size_falls_back_to_image(mar20_root, tmp_path):
+    xml = mar20_root / "Annotations" / "Oriented Bounding Boxes" / "7.xml"
+    xml.write_text(XML.format(id=7).replace("<width>800</width>", "<width>0</width>").replace("<height>400</height>", "<height>0</height>"))
+    width, height, objects = prepare_mar20.parse_obb_xml(xml, mar20_root / "JPEGImages" / "7.jpg")
+    assert (width, height) == (800, 400) and len(objects) == 2
+    with pytest.raises(ValueError):
+        prepare_mar20.parse_obb_xml(xml, mar20_root / "JPEGImages" / "нет.jpg")
+
+
 def test_convert_mar20(mar20_root, tmp_path):
     out = tmp_path / "yolo"
     stats = prepare_mar20.convert(mar20_root, out, val_frac=0.34)

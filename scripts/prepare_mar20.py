@@ -22,6 +22,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
+from PIL import Image
+
 # порядок A1..A20 из статьи MAR20 (Yu et al., National Remote Sensing Bulletin, 2023)
 MAR20_NAMES = [
     "SU-35", "C-130", "C-17", "C-5", "F-16", "TU-160", "E-3", "B-52", "P-3C", "B-1B",
@@ -30,11 +32,17 @@ MAR20_NAMES = [
 CORNERS = ("left_top", "right_top", "right_bottom", "left_bottom")
 
 
-def parse_obb_xml(path: Path) -> tuple[int, int, list[tuple[int, list[float]]]]:
+def parse_obb_xml(path: Path, image: Path | None = None) -> tuple[int, int, list[tuple[int, list[float]]]]:
     """→ (width, height, [(class_index, [x1, y1, ..., x4, y4])]) в пикселях."""
     root = ET.parse(path).getroot()
-    width = int(float(root.findtext("size/width")))
-    height = int(float(root.findtext("size/height")))
+    width = int(float(root.findtext("size/width") or 0))
+    height = int(float(root.findtext("size/height") or 0))
+    if not (width and height):
+        # в некоторых копиях MAR20 размер в XML нулевой или отсутствует — берём из снимка
+        if image is None or not image.exists():
+            raise ValueError(f"{path.name}: размера снимка нет ни в XML, ни рядом в JPEGImages")
+        with Image.open(image) as im:
+            width, height = im.size
     objects = []
     for obj in root.iter("object"):
         box = obj.find("robndbox")
@@ -88,7 +96,7 @@ def convert(src: Path, out: Path, val_frac: float = 0.15, seed: int = 0, copy: b
             if not xml.exists() or not img.exists():
                 stats["missing"] += 1
                 continue
-            width, height, objects = parse_obb_xml(xml)
+            width, height, objects = parse_obb_xml(xml, img)
             dst = out / "images" / split / img.name
             if not dst.exists():
                 shutil.copy2(img, dst) if copy else os.symlink(img.resolve(), dst)
