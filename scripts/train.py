@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,6 +61,8 @@ def main() -> None:
     p.add_argument("--fraction", type=float, default=1.0, help="доля train для быстрых прогонов")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--noise", type=float, default=0.0, help="вероятность гауссова шума в аугментациях")
+    p.add_argument("--robustness", type=int, default=400,
+                   help="после обучения замерить устойчивость на N снимках (0 — не мерить)")
     args = p.parse_args()
 
     device = args.device or pick_device()
@@ -104,6 +107,18 @@ def main() -> None:
     split = "test" if check_det_dataset(args.data).get("test") else "val"
     report = evaluate(target, args.data, split=split, imgsz=args.imgsz, batch=args.batch, device=device.split(",")[0])
     print(to_markdown(report))
+
+    if args.robustness:
+        # меряем здесь, а не отдельной ячейкой ноутбука: так замер не зависит от того,
+        # какая версия ноутбука оказалась у запускающего
+        command = [
+            sys.executable, str(ROOT / "scripts" / "robustness.py"),
+            "--data", str(args.data), "--weights", str(target), "--split", split,
+            "--limit", str(args.robustness), "--imgsz", str(args.imgsz),
+            "--batch", str(args.batch), "--device", device.split(",")[0],
+        ]
+        print(f"\nзамер устойчивости: {' '.join(command[1:])}")
+        subprocess.run(command, check=False)  # неудача замера не должна ронять результат обучения
 
 
 if __name__ == "__main__":
