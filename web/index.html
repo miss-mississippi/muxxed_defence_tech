@@ -291,7 +291,7 @@ function popupHtml(f) {
     ? `${p.center_lat.toFixed(6)}, ${p.center_lon.toFixed(6)}<br>${p.length_m.toFixed(1)} × ${p.width_m.toFixed(1)} м · азимут ${p.orientation_deg.toFixed(0)}°`
     : `пиксели: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
   const options = Object.keys(state.classIds).map(n => `<option ${n === className(p) ? "selected" : ""}>${esc(n)}</option>`).join("");
-  const dev = p.size_deviation != null ? ` · расхождение ${Math.round(p.size_deviation * 100)}%` : "";
+  const dev = p.size_deviation != null ? ` · расхождение ${(p.size_deviation * 100).toFixed(1)}%` : "";
   const geom = p.size_check === "mismatch"
     ? `<br><b style="color:#b00">⚠ тип не подтверждён геометрией</b>${dev}`
     : p.size_check === "borderline" ? `<br><b style="color:#b26a00">≈ на границе допуска</b>${dev}`

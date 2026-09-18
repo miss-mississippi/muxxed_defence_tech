@@ -376,7 +376,7 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
         deviation = r["size_deviation"] if "size_deviation" in r.keys() else None
         geom = size_ru.get(verdict, "—")
         if verdict in ("mismatch", "borderline") and deviation is not None:
-            geom += f" ({deviation:.0%})"
+            geom += f" ({deviation:.1%})"
         return (
             f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td>"
             f"<td>{e(r['model'] or '')}</td><td>{r['confidence']:.2f}</td>"
