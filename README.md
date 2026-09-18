@@ -162,9 +162,13 @@ NOTES.md      решения и метрики
 - **DOTA** — датасет исходных весов, <https://captain-whu.github.io/DOTA/>. По условиям авторов —
   только для академического использования.
 - **MAR20** — датасет для дообучения (военные самолёты), CC BY-NC 4.0, <https://gcheng-nwpu.github.io/>.
-- **Демо-снимки** — Maxar Open Data Program, CC BY-NC 4.0, © Maxar Technologies,
+- **Демо-снимки (Дурбан)** — Maxar Open Data Program, CC BY-NC 4.0, © Maxar Technologies,
   <https://registry.opendata.aws/maxar-open-data/>. Не хранятся в репозитории, скачиваются
   `scripts/fetch_demo_scene.py`.
+- **Снимок Атырау** — Copernicus Sentinel-2 L2A, 14.09.2026, 10 м/px, через AWS Open Data
+  (`sentinel-cogs`), пресет `scripts/fetch_demo_scene.py atyrau_s2`. Данные Copernicus свободны,
+  **включая коммерческое использование** — в отличие от MAR20 и Maxar выше. Использован для замера
+  границы применимости по разрешению (раздел 7 [отчёта](docs/report.md)).
 - **Leaflet 1.9.4** — BSD-2-Clause, <https://leafletjs.com>.
 - Подложки карты: Esri World Imagery и OpenStreetMap — только онлайн, с атрибуцией.
 - **samples/boats.jpg** — пример из документации Ultralytics.
