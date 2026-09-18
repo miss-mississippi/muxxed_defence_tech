@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS detections (
     length_m        REAL,
     width_m         REAL,
     orientation_deg REAL,
-    size_check      TEXT,                              -- ok | mismatch | unknown: сверка габаритов с паспортными
+    size_check      TEXT,                              -- ok | borderline | mismatch | unknown
     size_deviation  REAL,                              -- относительное расхождение с паспортным размером
     review_status   TEXT NOT NULL DEFAULT 'pending',   -- pending | confirmed | rejected
     review_class    TEXT,                              -- класс, исправленный экспертом

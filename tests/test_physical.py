@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from detector.physical import MISMATCH, OK, REFERENCE, UNKNOWN, annotate, check_size
+from detector.physical import BORDERLINE, MISMATCH, OK, REFERENCE, UNKNOWN, annotate, check_size
 
 
 def test_c5_twice_too_small_is_flagged():
@@ -29,9 +29,16 @@ def test_e8_matching_size_passes():
     assert check.confirmed
 
 
-def test_borderline_depends_on_tolerance():
-    # C-17 41.5 x 39.0 м: расхождение 24.7%, при штатном допуске 25% проходит
-    assert check_size("C-17", 41.5, 39.0, tolerance=0.25).verdict == OK
+def test_borderline_is_its_own_verdict():
+    # C-17 41.5 x 39.0 м: расхождение 24.7% — ни совпадение, ни промах
+    check = check_size("C-17", 41.5, 39.0)
+    assert check.verdict == BORDERLINE
+    assert not check.confirmed
+    assert check.deviation == pytest.approx(0.247, abs=0.005)
+
+
+def test_verdict_boundaries_are_configurable():
+    assert check_size("C-17", 41.5, 39.0, borderline=0.30).verdict == OK
     assert check_size("C-17", 41.5, 39.0, tolerance=0.20).verdict == MISMATCH
 
 

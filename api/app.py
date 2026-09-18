@@ -256,7 +256,7 @@ def create_app(
         model: list[str] | None = Query(None, description="имена моделей"),
         min_conf: float = Query(0.0, ge=0, le=1),
         status: list[ReviewStatus] | None = Query(None),
-        size_check: list[str] | None = Query(None, description="ok | mismatch | unknown — сверка габаритов с паспортными"),
+        size_check: list[str] | None = Query(None, description="ok | borderline | mismatch | unknown — сверка габаритов с паспортными"),
         bbox: str | None = Query(None, description="west,south,east,north (WGS84)"),
         limit: int = Query(5000, ge=1, le=50000),
         offset: int = Query(0, ge=0),
@@ -357,7 +357,8 @@ def create_app(
 def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
     e = html.escape
     status_ru = {"pending": "не проверено", "confirmed": "подтверждено", "rejected": "отклонено"}
-    size_ru = {"ok": "габариты сходятся", "mismatch": "тип не подтверждён", "unknown": "—"}
+    size_ru = {"ok": "габариты сходятся", "borderline": "на границе допуска",
+               "mismatch": "тип не подтверждён", "unknown": "—"}
     by_class: dict[str, int] = {}
     for r in rows:
         name = r["review_class"] or r["class_name"]
@@ -374,7 +375,7 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
         verdict = (r["size_check"] if "size_check" in r.keys() else None) or "unknown"
         deviation = r["size_deviation"] if "size_deviation" in r.keys() else None
         geom = size_ru.get(verdict, "—")
-        if verdict == "mismatch" and deviation is not None:
+        if verdict in ("mismatch", "borderline") and deviation is not None:
             geom += f" ({deviation:.0%})"
         return (
             f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td>"

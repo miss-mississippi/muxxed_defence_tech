@@ -5,7 +5,8 @@
 Так отсеялся C-5 Galaxy с габаритами 38.8 x 35.6 м при паспортных 75.5 x 67.9 м.
 
 Совпадение размеров типа не доказывает: Boeing 767 (48.5 x 47.6 м) неотличим по габаритам
-от E-8 на базе Boeing 707 (46.6 x 44.4 м). Ловятся только грубые промахи.
+от E-8 на базе Boeing 707 (46.6 x 44.4 м). Ловятся только грубые промахи, поэтому
+вердикта три: габариты сходятся, на границе допуска, тип не подтверждён.
 
 Эталоны — открытые справочники: длина фюзеляжа и размах крыла.
 """
@@ -38,9 +39,10 @@ REFERENCE: dict[str, tuple[float, float, float | None]] = {
     "KC-10":  (55.4, 50.4, None),
 }
 
-OK = "ok"                # габариты совпадают с паспортными
-MISMATCH = "mismatch"    # габариты не сходятся — тип не подтверждён геометрией
-UNKNOWN = "unknown"      # нет эталона для класса или нет геопривязки
+OK = "ok"                    # габариты совпадают с паспортными
+BORDERLINE = "borderline"    # расхождение заметное, но объяснимое условиями съёмки
+MISMATCH = "mismatch"        # габариты не сходятся — тип не подтверждён геометрией
+UNKNOWN = "unknown"          # нет эталона для класса или нет геопривязки
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,9 @@ class SizeCheck:
             if self.expected_long[0] != self.expected_long[1] else f"{self.expected_long[0]:.0f}"
         if self.verdict == OK:
             return f"габариты соответствуют типу (ожидается ~{span} м по длинной оси)"
+        if self.verdict == BORDERLINE:
+            return (f"на границе допуска: расхождение {self.deviation:.0%} "
+                    f"(ожидается ~{span} м по длинной оси)")
         return (f"тип не подтверждён геометрией: расхождение {self.deviation:.0%} "
                 f"с паспортным размером (ожидается ~{span} м по длинной оси)")
 
@@ -82,12 +87,18 @@ def _deviation(value: float, lo: float, hi: float) -> float:
 
 
 def check_size(
-    class_name: str, length_m: float | None, width_m: float | None, tolerance: float = 0.25
+    class_name: str,
+    length_m: float | None,
+    width_m: float | None,
+    tolerance: float = 0.25,
+    borderline: float = 0.15,
 ) -> SizeCheck:
     """Сверяет измеренные габариты с паспортными для типа.
 
-    tolerance — допустимое относительное отклонение (0.25 = 25%). Запас нужен из-за
-    ошибки ориентированного бокса, тени, перспективы и точности геопривязки.
+    Градаций три, а не порог: двоичный ответ у самой границы вводит в заблуждение
+    в обе стороны. До borderline (15%) расхождение объясняется ошибкой бокса, тенью
+    и точностью геопривязки; от borderline до tolerance (25%) оно заметное, но само
+    по себе ошибкой типа не является; дальше тип считается неподтверждённым.
     """
     reference = REFERENCE.get(class_name)
     if reference is None or length_m is None or width_m is None:
@@ -95,14 +106,20 @@ def check_size(
     long_range, short_range = _bounds(*reference)
     measured_long, measured_short = max(length_m, width_m), min(length_m, width_m)
     deviation = max(_deviation(measured_long, *long_range), _deviation(measured_short, *short_range))
-    verdict = OK if deviation <= tolerance else MISMATCH
+    if deviation <= borderline:
+        verdict = OK
+    elif deviation <= tolerance:
+        verdict = BORDERLINE
+    else:
+        verdict = MISMATCH
     return SizeCheck(verdict, round(deviation, 3), long_range, short_range)
 
 
-def annotate(properties: dict, tolerance: float = 0.25) -> dict:
+def annotate(properties: dict, tolerance: float = 0.25, borderline: float = 0.15) -> dict:
     """Добавляет к свойствам детекции результат проверки габаритами (на месте)."""
     check = check_size(
-        properties.get("class_name", ""), properties.get("length_m"), properties.get("width_m"), tolerance
+        properties.get("class_name", ""), properties.get("length_m"), properties.get("width_m"),
+        tolerance, borderline,
     )
     properties["size_check"] = check.verdict
     if check.verdict != UNKNOWN:
