@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS detections (
     length_m        REAL,
     width_m         REAL,
     orientation_deg REAL,
+    size_check      TEXT,                              -- ok | mismatch | unknown: сверка габаритов с паспортными
+    size_deviation  REAL,                              -- относительное расхождение с паспортным размером
     review_status   TEXT NOT NULL DEFAULT 'pending',   -- pending | confirmed | rejected
     review_class    TEXT,                              -- класс, исправленный экспертом
     review_comment  TEXT,
@@ -58,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_detections_center ON detections(center_lon, cente
 
 DETECTION_FIELDS = (
     "id", "scene_id", "class_id", "class_name", "model", "confidence", "cx", "cy", "w", "h", "angle",
-    "center_lon", "center_lat", "length_m", "width_m", "orientation_deg",
+    "center_lon", "center_lat", "length_m", "width_m", "orientation_deg", "size_check", "size_deviation",
     "review_status", "review_class", "review_comment", "reviewed_at",
 )
 
@@ -68,10 +70,12 @@ def init(path: Path) -> None:
     with session(path) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
-        try:  # каталог, созданный до появления нескольких моделей
-            conn.execute("ALTER TABLE detections ADD COLUMN model TEXT")
-        except sqlite3.OperationalError:
-            pass
+        # каталоги, созданные до появления этих колонок
+        for column, ddl in (("model", "TEXT"), ("size_check", "TEXT"), ("size_deviation", "REAL")):
+            try:
+                conn.execute(f"ALTER TABLE detections ADD COLUMN {column} {ddl}")
+            except sqlite3.OperationalError:
+                pass
 
 
 @contextmanager

@@ -99,6 +99,13 @@
           <option value="confirmed">подтверждено</option>
           <option value="rejected">отклонено</option>
         </select>
+        <label for="geom">Геометрия</label>
+        <select id="geom">
+          <option value="">все</option>
+          <option value="mismatch">тип не подтверждён</option>
+          <option value="ok">габариты совпадают</option>
+          <option value="unknown">не проверялась</option>
+        </select>
       </div>
       <div class="links">
         <a id="report" target="_blank" aria-disabled="true">Отчёт</a>
@@ -233,9 +240,10 @@ async function openScene(id) {
 // ---------- обнаружения ----------
 
 function visibleFeatures() {
-  const minConf = +$("conf").value, status = $("status").value;
+  const minConf = +$("conf").value, status = $("status").value, geom = $("geom").value;
   return state.features.filter(({ properties: p }) =>
-    p.confidence >= minConf && (!status || p.review_status === status) && !state.hidden.has(className(p)));
+    p.confidence >= minConf && (!status || p.review_status === status)
+    && (!geom || (p.size_check || "unknown") === geom) && !state.hidden.has(className(p)));
 }
 
 function renderClasses() {
@@ -268,7 +276,7 @@ function render() {
   $("detections").innerHTML = list.map(({ id, properties: p }) => `
     <li class="det ${p.review_status} ${id === state.selected ? "sel" : ""}" data-id="${id}">
       <span class="dot" style="background:${colorOf(className(p))}"></span>
-      <span class="name">${esc(className(p))}</span>
+      <span class="name">${esc(className(p))}${p.size_check === "mismatch" ? ` <span title="тип не подтверждён геометрией">⚠</span>` : ""}</span>
       <span class="num">${p.confidence.toFixed(2)}</span>
       <span class="num">${p.length_m != null ? p.length_m.toFixed(0) + " м" : ""}</span>
       <button class="ok" data-act="confirmed" title="Подтвердить (C)">✓</button>
@@ -282,7 +290,10 @@ function popupHtml(f) {
     ? `${p.center_lat.toFixed(6)}, ${p.center_lon.toFixed(6)}<br>${p.length_m.toFixed(1)} × ${p.width_m.toFixed(1)} м · азимут ${p.orientation_deg.toFixed(0)}°`
     : `пиксели: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
   const options = Object.keys(state.classIds).map(n => `<option ${n === className(p) ? "selected" : ""}>${esc(n)}</option>`).join("");
-  return `<div class="pop"><b>${esc(className(p))}</b> · ${p.confidence.toFixed(2)} · #${f.id}<br>${where}<br>
+  const geom = p.size_check === "mismatch"
+    ? `<br><b style="color:#b00">⚠ тип не подтверждён геометрией</b>${p.size_deviation != null ? ` · расхождение ${Math.round(p.size_deviation * 100)}%` : ""}`
+    : p.size_check === "ok" ? `<br><span class="muted">габариты соответствуют типу</span>` : "";
+  return `<div class="pop"><b>${esc(className(p))}</b> · ${p.confidence.toFixed(2)} · #${f.id}<br>${where}${geom}<br>
     Модель: ${esc(p.model || "—")}<br>
     Статус: ${STATUS_RU[p.review_status]}${p.review_class ? ` (модель дала: ${esc(p.class_name)})` : ""}
     <div class="row"><select id="fix-class">${options}</select></div>
@@ -358,6 +369,7 @@ $("classes").addEventListener("change", e => {
 
 $("conf").addEventListener("input", () => { $("conf-val").textContent = (+$("conf").value).toFixed(2); render(); });
 $("status").addEventListener("change", render);
+$("geom").addEventListener("change", render);
 
 $("detections").addEventListener("click", e => {
   const li = e.target.closest(".det");

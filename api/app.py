@@ -1,4 +1,4 @@
-"""REST API: загрузка снимков, каталог обнаружений, экспертная проверка, отчёт, карта.
+"""REST API: загрузка снимков, каталог обнаружений, визуальная проверка оператором, отчёт, карта.
 
     .venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000
     # карта: http://127.0.0.1:8000   документация API: http://127.0.0.1:8000/docs
@@ -71,7 +71,7 @@ def create_app(
 
     app = FastAPI(
         title="Идентификация объектов на космических снимках",
-        description="YOLO11-OBB: детекция, каталог обнаружений, экспертная проверка. NU STeP x Defense Tech Challenge.",
+        description="YOLO11-OBB: детекция, каталог обнаружений, визуальная проверка оператором. NU STeP x Defense Tech Challenge.",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -116,12 +116,14 @@ def create_app(
                     json.dumps(p["polygon_px"]), json.dumps(f["geometry"]) if f["geometry"] else None,
                     p["cx"], p["cy"], p["w"], p["h"], p["angle"],
                     p.get("center_lon"), p.get("center_lat"), p.get("length_m"), p.get("width_m"), p.get("orientation_deg"),
+                    p.get("size_check"), p.get("size_deviation"),
                 ))
             with db.session(db_path) as conn:
                 conn.executemany(
                     """INSERT INTO detections (scene_id, class_id, class_name, model, confidence, polygon_px, geometry,
-                           cx, cy, w, h, angle, center_lon, center_lat, length_m, width_m, orientation_deg)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           cx, cy, w, h, angle, center_lon, center_lat, length_m, width_m, orientation_deg,
+                           size_check, size_deviation)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     rows,
                 )
                 conn.execute(
@@ -254,6 +256,7 @@ def create_app(
         model: list[str] | None = Query(None, description="имена моделей"),
         min_conf: float = Query(0.0, ge=0, le=1),
         status: list[ReviewStatus] | None = Query(None),
+        size_check: list[str] | None = Query(None, description="ok | mismatch | unknown — сверка габаритов с паспортными"),
         bbox: str | None = Query(None, description="west,south,east,north (WGS84)"),
         limit: int = Query(5000, ge=1, le=50000),
         offset: int = Query(0, ge=0),
@@ -272,6 +275,9 @@ def create_app(
         if status:
             where.append(f"review_status IN ({','.join('?' * len(status))})")
             params += status
+        if size_check:
+            where.append(f"COALESCE(size_check, 'unknown') IN ({','.join('?' * len(size_check))})")
+            params += size_check
         if bbox:
             try:
                 west, south, east, north = (float(v) for v in bbox.split(","))
@@ -294,7 +300,7 @@ def create_app(
 
     @app.patch("/api/detections/{detection_id}", tags=["обнаружения"])
     def review_detection(detection_id: int, review: Review) -> dict:
-        """Экспертная проверка: подтвердить / отклонить / исправить класс."""
+        """Визуальная проверка оператором: подтвердить / отклонить / исправить класс."""
         if review.class_name is not None and review.class_name not in registry().all_class_names():
             raise HTTPException(422, f"неизвестный класс {review.class_name}")
         reviewed_at = None if review.status == "pending" else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -351,6 +357,7 @@ def create_app(
 def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
     e = html.escape
     status_ru = {"pending": "не проверено", "confirmed": "подтверждено", "rejected": "отклонено"}
+    size_ru = {"ok": "габариты сходятся", "mismatch": "тип не подтверждён", "unknown": "—"}
     by_class: dict[str, int] = {}
     for r in rows:
         name = r["review_class"] or r["class_name"]
@@ -364,10 +371,16 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
         center = "" if r["center_lat"] is None else f"{r['center_lat']:.6f}, {r['center_lon']:.6f}"
         size = "" if r["length_m"] is None else f"{r['length_m']:.1f} × {r['width_m']:.1f}"
         azimuth = "" if r["orientation_deg"] is None else f"{r['orientation_deg']:.0f}°"
+        verdict = (r["size_check"] if "size_check" in r.keys() else None) or "unknown"
+        deviation = r["size_deviation"] if "size_deviation" in r.keys() else None
+        geom = size_ru.get(verdict, "—")
+        if verdict == "mismatch" and deviation is not None:
+            geom += f" ({deviation:.0%})"
         return (
             f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td>"
             f"<td>{e(r['model'] or '')}</td><td>{r['confidence']:.2f}</td>"
-            f"<td>{center}</td><td>{size}</td><td>{azimuth}</td><td>{status_ru[r['review_status']]}</td></tr>"
+            f"<td>{center}</td><td>{size}</td><td>{geom}</td><td>{azimuth}</td>"
+            f"<td>{status_ru[r['review_status']]}</td></tr>"
         )
 
     table = "".join(row_html(r) for r in rows)
@@ -390,13 +403,13 @@ th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px sol
 <tr><th>Границы (WGS84)</th><td>{'—' if not bounds else f'З {bounds[0]:.5f}, Ю {bounds[1]:.5f}, В {bounds[2]:.5f}, С {bounds[3]:.5f}'}</td></tr>
 <tr><th>Модель</th><td>{e(scene['model'] or '')}</td></tr>
 <tr><th>Время обработки, с</th><td>{scene['elapsed_s']}</td></tr>
-<tr><th>Экспертная проверка</th><td>{review}</td></tr>
+<tr><th>Визуальная проверка оператором</th><td>{review}</td></tr>
 </table>
 <h2>Объекты по классам (уверенность ≥ {min_conf:.2f}, без отклонённых)</h2>
 <table><tr><th>Класс</th><th>Количество</th></tr>{counts}</table>
 <img src="/api/scenes/{scene['id']}/preview.png" alt="превью сцены">
 <h2>Перечень обнаружений</h2>
-<table><tr><th>ID</th><th>Класс</th><th>Модель</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
+<table><tr><th>ID</th><th>Класс</th><th>Модель</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Геометрия</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
 </body></html>"""
 
 
