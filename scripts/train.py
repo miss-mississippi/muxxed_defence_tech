@@ -25,11 +25,10 @@ from scripts.eval import evaluate, to_markdown  # noqa: E402
 
 
 def noise_augmentations(probability: float) -> list | None:
-    """Набор аугментаций с гауссовым шумом (штатный параметр ultralytics `augmentations`).
+    """Стандартный набор аугментаций ultralytics плюс гауссов шум.
 
-    Замер устойчивости показал единственную реальную слабость модели — сенсорный шум
-    (mAP50 0.900 → 0.371 при σ=15): в стандартном наборе аугментаций ultralytics шума нет.
-    Повторяем стандартный набор и добавляем к нему GaussNoise.
+    Шума в штатном наборе нет, из-за этого модель проседала на зашумлённых снимках:
+    mAP50 0.900 → 0.371 при σ=15.
     """
     try:
         import albumentations as A

@@ -244,8 +244,7 @@ def _feature(idx: int, det: Detection, transform, to_wgs: Transformer | None) ->
             width_m=round(min(len01, len12), 1),
             orientation_deg=round(long_az % 180, 1),  # азимут длинной оси, 0–180
         )
-    # сверка измеренных габаритов с паспортными: ловит грубые ошибки типа там, где есть масштаб
-    annotate(props)
+    annotate(props)  # сверка габаритов с паспортными для типа
     return {"type": "Feature", "id": idx, "geometry": geometry, "properties": props}
 
 
