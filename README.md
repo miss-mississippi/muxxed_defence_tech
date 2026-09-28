@@ -85,6 +85,22 @@ MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800_noise.pt:refine" .
 `notebooks/kaggle_train.ipynb`: `NOISE=0.5` включает шумовую аугментацию, `MODEL=yolo11m-obb.pt` —
 архитектуру `m`.
 
+## Сверка с реестром техники
+
+Прототип: обнаруженные самолёты сравниваются с тем, что числится на аэродромах реестра.
+Реестр — аэродромы (полигон GeoJSON в WGS84) и число бортов по типам; формат — в
+[samples/registry_demo.json](samples/registry_demo.json). Это **условный** пример: гражданский
+аэродром Дурбана и выдуманные борта. Настоящий реестр передаётся в запросе и не сохраняется.
+
+```bash
+.venv/bin/python scripts/check_inventory.py data/demo/durban_airport.tif --registry samples/registry_demo.json
+curl -X POST http://127.0.0.1:8000/api/scenes/7/inventory -H "Content-Type: application/json" --data @samples/registry_demo.json
+```
+
+Тип засчитывается, только если ему не противоречат габариты; аэродром вне снимка и типы, которых
+модель не знает, помечаются отдельно; при разрешении грубее 1 м отчёт предупреждает, что сверка
+по типам ненадёжна.
+
 ## REST API
 
 | Метод | Путь | Назначение |
@@ -98,6 +114,7 @@ MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800_noise.pt:refine" .
 | PATCH | `/api/detections/{id}` | визуальная проверка оператором `{status, class_name?, comment?}` |
 | GET | `/api/stats` | сводка по классам и статусам проверки |
 | POST | `/api/detect` | снимок → GeoJSON сразу в ответе, без сохранения (для внешних систем) |
+| POST | `/api/scenes/{id}/inventory` | сверка самолётов сцены с реестром (реестр в теле запроса, не сохраняется) |
 | GET | `/api/health`, `/api/model` | состояние, классы модели |
 
 ## Использование из кода
@@ -140,13 +157,13 @@ geojson = result.to_geojson()                      # FeatureCollection в WGS84
 ## Структура
 
 ```
-detector/     ML-ядро: модель, тайлинг, склейка, геопривязка, сверка габаритов, формат Detection
+detector/     ML-ядро: модель, тайлинг, склейка, геопривязка, сверка габаритов и с реестром
 api/          FastAPI + SQLite-каталог, визуальная проверка оператором, отчёт
 web/          карта Leaflet (библиотека в web/vendor — работает без CDN)
 scripts/      infer, detect_scene, prepare_mar20, train, eval, benchmark, robustness,
-              export_reviewed, recheck_sizes, fetch_demo_scene
+              export_reviewed, recheck_sizes, fetch_demo_scene, check_inventory
 notebooks/    обучение и замеры на Kaggle
-tests/        pytest: тайлинг, склейка, геопривязка, конвертер, API, сверка габаритов
+tests/        pytest: тайлинг, склейка, геопривязка, конвертер, API, сверки габаритов и реестра
 samples/      тестовый снимок
 NOTES.md      решения и метрики
 ```

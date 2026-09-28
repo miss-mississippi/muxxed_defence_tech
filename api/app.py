@@ -20,12 +20,13 @@ from pathlib import Path
 from typing import Literal
 
 import cv2
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from detector import DEFAULT_WEIGHTS, Detector, ModelRegistry, detect_scene, render_preview
+from detector.inventory import parse_registry, reconcile
 
 from . import db
 
@@ -327,6 +328,30 @@ def create_app(
             "by_class": {r["name"]: r["n"] for r in by_class},
             "by_status": {r["review_status"]: r["n"] for r in by_status},
         }
+
+    # ---------- сверка с реестром техники ----------
+
+    @app.post("/api/scenes/{scene_id}/inventory", tags=["реестр"])
+    def scene_inventory(
+        scene_id: int,
+        doc: dict = Body(..., description="реестр: {airfields: [{id, name, area: GeoJSON, expected: {тип: число}}]}"),
+        use_review: bool = Query(True, description="учитывать решения оператора"),
+        use_size_check: bool = Query(True, description="не засчитывать типы, которым противоречат габариты"),
+    ) -> dict:
+        """Сверка самолётов сцены с реестром. Реестр приходит в запросе и нигде не сохраняется."""
+        scene = get_scene(scene_id)
+        try:
+            airfields = parse_registry(doc)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        with db.session(db_path) as conn:
+            rows = conn.execute("SELECT * FROM detections WHERE scene_id = ?", (scene_id,)).fetchall()
+        r = registry()
+        known = {c for name in r.refine_only for c in r.class_names[name].values()}
+        report = reconcile([db.detection_feature(row) for row in rows], airfields, gsd_m=scene["gsd_m"],
+                           scene_bounds=scene["bounds_wgs84"],
+                           known_types=known, use_review=use_review, trust_size_check=use_size_check)
+        return report.to_dict()
 
     # ---------- синхронная детекция для интеграции ----------
 

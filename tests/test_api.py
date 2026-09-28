@@ -96,3 +96,19 @@ def test_detect_sync_without_georeference(client):
         geojson = client.post("/api/detect", files={"file": ("boats.jpg", f, "image/jpeg")}).json()
     assert geojson["scene"]["path"] == "boats.jpg" and not geojson["scene"]["georeferenced"]
     assert geojson["features"] and geojson["features"][0]["geometry"] is None
+
+
+def test_inventory_endpoint(client, utm_uint16_tif):
+    with utm_uint16_tif.open("rb") as f:
+        scene_id = client.post("/api/scenes", files={"file": ("inv.tif", f, "image/tiff")}).json()["id"]
+    west, south, east, north = client.get(f"/api/scenes/{scene_id}").json()["bounds_wgs84"]
+    area = {"type": "Polygon",
+            "coordinates": [[[west, south], [east, south], [east, north], [west, north], [west, south]]]}
+    doc = {"airfields": [{"id": "x", "name": "X", "area": area, "expected": {"C-17": 1}}]}
+    r = client.post(f"/api/scenes/{scene_id}/inventory", json=doc)
+    assert r.status_code == 200
+    line = r.json()["airfields"][0]["types"][0]
+    # модели типов в тестовом приложении нет: честный ответ «не распознаёт», а не «не обнаружено»
+    assert line["type"] == "C-17" and line["status"] == "unrecognizable"
+    assert client.post(f"/api/scenes/{scene_id}/inventory", json={"airfields": []}).status_code == 422
+    assert client.post("/api/scenes/999999/inventory", json=doc).status_code == 404
