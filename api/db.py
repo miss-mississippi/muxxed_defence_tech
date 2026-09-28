@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     elapsed_s       REAL,
     model           TEXT,
     warnings        TEXT,                              -- JSON list
+    completeness_at TEXT,                              -- когда оператор отметил все пропуски
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
@@ -53,7 +54,21 @@ CREATE TABLE IF NOT EXISTS detections (
     reviewed_at     TEXT
 );
 
+-- объекты, которые модель пропустила: нужны для оценки полноты
+CREATE TABLE IF NOT EXISTS missed (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scene_id        INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+    class_name      TEXT NOT NULL,
+    center_lon      REAL,
+    center_lat      REAL,
+    cx              REAL,                              -- пиксели, для снимков без геопривязки
+    cy              REAL,
+    comment         TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_detections_scene  ON detections(scene_id);
+CREATE INDEX IF NOT EXISTS idx_missed_scene      ON missed(scene_id);
 CREATE INDEX IF NOT EXISTS idx_detections_class  ON detections(class_name);
 CREATE INDEX IF NOT EXISTS idx_detections_center ON detections(center_lon, center_lat);
 """
@@ -76,6 +91,10 @@ def init(path: Path) -> None:
                 conn.execute(f"ALTER TABLE detections ADD COLUMN {column} {ddl}")
             except sqlite3.OperationalError:
                 pass
+        try:
+            conn.execute("ALTER TABLE scenes ADD COLUMN completeness_at TEXT")
+        except sqlite3.OperationalError:
+            pass
 
 
 @contextmanager
@@ -106,4 +125,12 @@ def detection_feature(row: sqlite3.Row) -> dict:
     props = {k: row[k] for k in DETECTION_FIELDS}
     props["polygon_px"] = json.loads(row["polygon_px"])
     geometry = json.loads(row["geometry"]) if row["geometry"] else None
+    return {"type": "Feature", "id": row["id"], "geometry": geometry, "properties": props}
+
+
+def missed_feature(row: sqlite3.Row) -> dict:
+    lon, lat = row["center_lon"], row["center_lat"]
+    geometry = {"type": "Point", "coordinates": [lon, lat]} if lon is not None else None
+    props = {k: row[k] for k in ("id", "scene_id", "class_name", "center_lon", "center_lat", "cx", "cy",
+                                 "comment", "created_at")}
     return {"type": "Feature", "id": row["id"], "geometry": geometry, "properties": props}

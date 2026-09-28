@@ -66,6 +66,10 @@
   .pop .row { display: flex; gap: 6px; margin-top: 8px; }
   .pop select, .pop button { color: #111; background: #fff; border-color: #bbb; }
   #toast { position: fixed; right: 16px; bottom: 16px; background: #3b1d1d; border: 1px solid var(--bad); padding: 8px 12px; border-radius: 6px; z-index: 1000; }
+  .recall-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #miss-mode.on { background: var(--bad); border-color: var(--bad); }
+  #recall { margin-top: 6px; font-size: 12px; }
+  .leaflet-container.miss-mode { cursor: crosshair; }
 </style>
 </head>
 <body>
@@ -114,6 +118,14 @@
         <a href="/docs" target="_blank">API</a>
       </div>
     </section>
+    <section>
+      <h2>Полнота</h2>
+      <div class="recall-row">
+        <button id="miss-mode" disabled>Отметить пропущенное</button>
+        <label class="muted"><input type="checkbox" id="complete" disabled> все пропуски отмечены</label>
+      </div>
+      <div id="recall" class="muted">откройте сцену</div>
+    </section>
     <section class="grow">
       <h2>Обнаружения <span id="count" class="muted"></span></h2>
       <div class="hint muted">↑ ↓ — выбор · C — подтвердить · R — отклонить</div>
@@ -135,7 +147,8 @@ const KZ_VIEW = [[48.0, 67.0], 5];
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const state = { model: null, classIds: {}, scene: null, features: [], visibleIds: [], selected: null,
-                hidden: new Set(), map: null, layer: null, shapes: new Map(), pendingOpen: null };
+                hidden: new Set(), map: null, layer: null, shapes: new Map(), pendingOpen: null,
+                missed: [], missLayer: null, missMode: false };
 
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
@@ -175,7 +188,9 @@ function makeMap(georef) {
     map.setView(...KZ_VIEW);
   }
   L.control.scale({ imperial: false }).addTo(map);
+  map.on("click", onMapClick);
   state.map = map;
+  state.missLayer = null;
 }
 
 function latlngs(f) {
@@ -236,6 +251,9 @@ async function openScene(id) {
   (scene.warnings || []).forEach(toast);
   loadScenes();
   render();
+  setMissMode(false);
+  ["miss-mode", "complete"].forEach(b => ($(b).disabled = false));
+  loadMissed().catch(e => toast(e.message));
 }
 
 // ---------- обнаружения ----------
@@ -269,7 +287,9 @@ function render() {
   state.layer = L.layerGroup().addTo(state.map);
   state.shapes.clear();
   for (const f of list) {
-    const shape = L.polygon(latlngs(f), styleOf(f.properties, f.id === state.selected)).addTo(state.layer);
+    // клик по объекту не должен долетать до карты: там он означал бы «отметить пропуск»
+    const shape = L.polygon(latlngs(f), { ...styleOf(f.properties, f.id === state.selected), bubblingMouseEvents: false })
+      .addTo(state.layer);
     shape.on("click", () => select(f.id, false));
     state.shapes.set(f.id, shape);
   }
@@ -341,6 +361,87 @@ async function review(id, status) {
 }
 window.review = review;
 
+// ---------- полнота ----------
+
+function missedLatLng(f) {
+  const p = f.properties;
+  return state.scene.georeferenced ? [p.center_lat, p.center_lon] : [-p.cy, p.cx];
+}
+
+function renderMissed() {
+  if (state.missLayer) state.missLayer.remove();
+  state.missLayer = L.layerGroup().addTo(state.map);
+  for (const f of state.missed) {
+    L.circleMarker(missedLatLng(f), { radius: 9, color: "#f85149", weight: 2, dashArray: "3 3",
+                                      fillOpacity: 0.1, bubblingMouseEvents: false })
+      .bindPopup(`<div class="pop"><b>Пропуск: ${esc(f.properties.class_name)}</b> · #${f.id}<br>
+        модель этот объект не нашла
+        <div class="row"><button onclick="removeMissed(${f.id})">Удалить отметку</button></div></div>`)
+      .addTo(state.missLayer);
+  }
+}
+
+async function loadRecall() {
+  const r = await api(`/api/scenes/${state.scene.id}/recall`);
+  $("complete").checked = r.complete;
+  const t = r.total;
+  if (!t.exist) { $("recall").textContent = "подтверждённых объектов пока нет"; return; }
+  const pct = v => (v == null ? "—" : `${Math.round(v * 100)}%`);
+  const label = r.complete ? "Полнота" : "Верхняя оценка полноты (пропуски отмечены не все)";
+  $("recall").innerHTML = `${label}: <b>${pct(t.recall["0.25"])}</b> при ≥ 0.25 · ` +
+    `<b>${pct(t.recall["0.4"])}</b> при ≥ 0.4<br>существует ${t.exist}, из них пропущено ${t.missed}`;
+}
+
+async function loadMissed() {
+  state.missed = (await api(`/api/scenes/${state.scene.id}/missed`)).features;
+  renderMissed();
+  await loadRecall();
+}
+
+function setMissMode(on) {
+  state.missMode = on;
+  $("miss-mode").classList.toggle("on", on);
+  $("miss-mode").textContent = on ? "Готово" : "Отметить пропущенное";
+  state.map.getContainer().classList.toggle("miss-mode", on);
+  if (on) {
+    // пропуск — объект, которого нет в каталоге вовсе, поэтому показываем весь каталог
+    $("conf").value = 0.25;
+    $("conf-val").textContent = "0.25";
+    render();
+    toast("Кликните по объекту, который модель пропустила. Порог опущен до 0.25 — виден весь каталог.");
+  }
+}
+
+function onMapClick(e) {
+  if (!state.missMode || !state.scene) return;
+  const options = Object.keys(state.classIds).map(n => `<option>${esc(n)}</option>`).join("");
+  L.popup().setLatLng(e.latlng).setContent(`<div class="pop"><b>Пропущенный объект</b>
+    <div class="row"><select id="miss-class">${options}</select></div>
+    <div class="row"><button onclick="addMissed(${e.latlng.lat}, ${e.latlng.lng})">Добавить</button></div></div>`)
+    .openOn(state.map);
+}
+
+async function addMissed(lat, lng) {
+  const cls = $("miss-class").value;
+  const body = state.scene.georeferenced ? { class_name: cls, lon: lng, lat } : { class_name: cls, cx: lng, cy: -lat };
+  try {
+    await api(`/api/scenes/${state.scene.id}/missed`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    state.map.closePopup();
+    await loadMissed();
+  } catch (err) { toast(err.message); }
+}
+window.addMissed = addMissed;
+
+async function removeMissed(id) {
+  try {
+    await api(`/api/missed/${id}`, { method: "DELETE" });
+    state.map.closePopup();
+    await loadMissed();
+  } catch (err) { toast(err.message); }
+}
+window.removeMissed = removeMissed;
+
 // ---------- события ----------
 
 $("upload").addEventListener("submit", async e => {
@@ -373,6 +474,14 @@ $("classes").addEventListener("change", e => {
 $("conf").addEventListener("input", () => { $("conf-val").textContent = (+$("conf").value).toFixed(2); render(); });
 $("status").addEventListener("change", render);
 $("geom").addEventListener("change", render);
+$("miss-mode").addEventListener("click", () => setMissMode(!state.missMode));
+$("complete").addEventListener("change", async e => {
+  try {
+    await api(`/api/scenes/${state.scene.id}/completeness`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ complete: e.target.checked }) });
+    await loadRecall();
+  } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+});
 
 $("detections").addEventListener("click", e => {
   const li = e.target.closest(".det");

@@ -112,3 +112,52 @@ def test_inventory_endpoint(client, utm_uint16_tif):
     assert line["type"] == "C-17" and line["status"] == "unrecognizable"
     assert client.post(f"/api/scenes/{scene_id}/inventory", json={"airfields": []}).status_code == 422
     assert client.post("/api/scenes/999999/inventory", json=doc).status_code == 404
+
+
+def test_missed_objects_and_recall(client, utm_uint16_tif):
+    from shapely.geometry import Point, shape
+
+    with utm_uint16_tif.open("rb") as f:
+        scene_id = client.post("/api/scenes", files={"file": ("recall.tif", f, "image/tiff")}).json()["id"]
+    scene = client.get(f"/api/scenes/{scene_id}").json()
+    feats = client.get("/api/detections", params={"scene_id": scene_id}).json()["features"]
+    polys = [shape(f["geometry"]) for f in feats]
+
+    # свободная точка внутри снимка, не попадающая ни в одно обнаружение
+    west, south, east, north = scene["bounds_wgs84"]
+    free = next(
+        (lon, lat)
+        for i in range(1, 40) for j in range(1, 40)
+        for lon, lat in [(west + (east - west) * i / 40, south + (north - south) * j / 40)]
+        if not any(p.covers(Point(lon, lat)) for p in polys)
+    )
+
+    url = f"/api/scenes/{scene_id}/missed"
+    r = client.post(url, json={"class_name": "ship", "lon": free[0], "lat": free[1]})
+    assert r.status_code == 201 and r.json()["geometry"]["type"] == "Point"
+    missed_id = r.json()["id"]
+
+    # поверх найденного объекта — это не пропуск
+    c = feats[0]["properties"]
+    assert client.post(url, json={"class_name": "ship", "lon": c["center_lon"], "lat": c["center_lat"]}).status_code == 409
+    assert client.post(url, json={"class_name": "ship", "lon": 0.0, "lat": 0.0}).status_code == 422
+    assert client.post(url, json={"class_name": "tank", "lon": free[0], "lat": free[1]}).status_code == 422
+    assert client.post(url, json={"class_name": "ship"}).status_code == 422
+
+    assert len(client.get(url).json()["features"]) == 1
+
+    # до отметки о полноте — только верхняя оценка
+    rec = client.get(f"/api/scenes/{scene_id}/recall").json()
+    assert rec["complete"] is False and rec["total"]["missed"] == 1
+    rec = client.put(f"/api/scenes/{scene_id}/completeness", json={"complete": True}).json()
+    assert rec["complete"] is True and not any("верхняя" in w for w in rec["warnings"])
+    assert "Полнота" in client.get(f"/api/scenes/{scene_id}/report").text
+
+    assert client.delete(f"/api/missed/{missed_id}").status_code == 204
+    assert client.delete(f"/api/missed/{missed_id}").status_code == 404
+    assert client.get(url).json()["features"] == []
+
+    # удаление сцены забирает и её отметки
+    client.post(url, json={"class_name": "ship", "lon": free[0], "lat": free[1]})
+    assert client.delete(f"/api/scenes/{scene_id}").status_code == 204
+    assert client.get(url).status_code == 404

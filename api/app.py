@@ -24,11 +24,13 @@ from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, Query, 
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from shapely.geometry import Point, Polygon, shape
 
 from detector import DEFAULT_WEIGHTS, Detector, ModelRegistry, detect_scene, render_preview
 from detector.inventory import parse_registry, reconcile
 
 from . import db
+from .recall import scene_recall
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = ROOT / "web"
@@ -40,6 +42,19 @@ class Review(BaseModel):
     status: ReviewStatus
     class_name: str | None = None  # исправленный экспертом класс
     comment: str | None = None
+
+
+class Missed(BaseModel):
+    class_name: str
+    lon: float | None = None  # для снимков с геопривязкой
+    lat: float | None = None
+    cx: float | None = None   # пиксели, для снимков без геопривязки
+    cy: float | None = None
+    comment: str | None = None
+
+
+class Completeness(BaseModel):
+    complete: bool
 
 
 def create_app(
@@ -224,6 +239,7 @@ def create_app(
             row = get_scene_row(conn, scene_id)
             scene_path = Path(row["path"])
             conn.execute("DELETE FROM detections WHERE scene_id = ?", (scene_id,))
+            conn.execute("DELETE FROM missed WHERE scene_id = ?", (scene_id,))
             conn.execute("DELETE FROM scenes WHERE id = ?", (scene_id,))
         scene_path.unlink(missing_ok=True)
         (previews_dir / f"{scene_id}.png").unlink(missing_ok=True)
@@ -246,7 +262,7 @@ def create_app(
                 "ORDER BY confidence DESC",
                 (scene_id, min_conf),
             ).fetchall()
-        return render_report(scene, rows, min_conf)
+        return render_report(scene, rows, min_conf, scene_recall_for(scene_id))
 
     # ---------- обнаружения ----------
 
@@ -329,6 +345,92 @@ def create_app(
             "by_status": {r["review_status"]: r["n"] for r in by_status},
         }
 
+    # ---------- полнота: пропущенные моделью объекты ----------
+
+    def detection_at(conn, scene_id: int, geo: bool, item: Missed) -> int | None:
+        rows = conn.execute(
+            "SELECT id, geometry, polygon_px FROM detections WHERE scene_id = ? AND review_status != 'rejected'",
+            (scene_id,),
+        ).fetchall()
+        point = Point(item.lon, item.lat) if geo else Point(item.cx, item.cy)
+        for r in rows:
+            poly = shape(json.loads(r["geometry"])) if geo and r["geometry"] else Polygon(json.loads(r["polygon_px"]))
+            if poly.covers(point):
+                return r["id"]
+        return None
+
+    def scene_recall_for(scene_id: int) -> dict:
+        with db.session(db_path) as conn:
+            scene = get_scene_row(conn, scene_id)
+            dets = conn.execute(
+                "SELECT class_name, review_class, review_status, confidence FROM detections WHERE scene_id = ?",
+                (scene_id,),
+            ).fetchall()
+            missed = conn.execute("SELECT class_name FROM missed WHERE scene_id = ?", (scene_id,)).fetchall()
+        return scene_recall([dict(d) for d in dets], [dict(m) for m in missed],
+                            complete=scene["completeness_at"] is not None)
+
+    @app.post("/api/scenes/{scene_id}/missed", status_code=201, tags=["полнота"])
+    def add_missed(scene_id: int, item: Missed) -> dict:
+        """Отметить объект, который модель пропустила. Отметки нужны только для оценки полноты."""
+        scene = get_scene(scene_id)
+        if item.class_name not in registry().all_class_names():
+            raise HTTPException(422, f"неизвестный класс {item.class_name}")
+        geo = bool(scene["georeferenced"])
+        if geo and (item.lon is None or item.lat is None):
+            raise HTTPException(422, "для снимка с геопривязкой нужны lon и lat")
+        if not geo and (item.cx is None or item.cy is None):
+            raise HTTPException(422, "для снимка без геопривязки нужны cx и cy")
+        if geo:
+            west, south, east, north = scene["bounds_wgs84"]
+            inside = west <= item.lon <= east and south <= item.lat <= north
+        else:
+            inside = 0 <= item.cx <= scene["width"] and 0 <= item.cy <= scene["height"]
+        if not inside:
+            raise HTTPException(422, "точка вне снимка")
+        with db.session(db_path) as conn:
+            hit = detection_at(conn, scene_id, geo, item)
+            if hit is not None:
+                raise HTTPException(409, f"здесь уже есть обнаружение #{hit}: его нужно подтвердить "
+                                         f"или исправить класс, а не отмечать как пропуск")
+            cur = conn.execute(
+                "INSERT INTO missed (scene_id, class_name, center_lon, center_lat, cx, cy, comment) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (scene_id, item.class_name, item.lon if geo else None, item.lat if geo else None,
+                 None if geo else item.cx, None if geo else item.cy, item.comment),
+            )
+            row = conn.execute("SELECT * FROM missed WHERE id = ?", (cur.lastrowid,)).fetchone()
+        return db.missed_feature(row)
+
+    @app.get("/api/scenes/{scene_id}/missed", tags=["полнота"])
+    def list_missed(scene_id: int) -> dict:
+        get_scene(scene_id)
+        with db.session(db_path) as conn:
+            rows = conn.execute("SELECT * FROM missed WHERE scene_id = ? ORDER BY id", (scene_id,)).fetchall()
+        return {"type": "FeatureCollection", "features": [db.missed_feature(r) for r in rows]}
+
+    @app.delete("/api/missed/{missed_id}", status_code=204, tags=["полнота"])
+    def delete_missed(missed_id: int) -> Response:
+        with db.session(db_path) as conn:
+            if conn.execute("DELETE FROM missed WHERE id = ?", (missed_id,)).rowcount == 0:
+                raise HTTPException(404, f"отметка {missed_id} не найдена")
+        return Response(status_code=204)
+
+    @app.put("/api/scenes/{scene_id}/completeness", tags=["полнота"])
+    def set_completeness(scene_id: int, body: Completeness) -> dict:
+        """Оператор подтверждает, что просмотрел всю сцену и отметил все пропуски."""
+        get_scene(scene_id)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if body.complete else None
+        with db.session(db_path) as conn:
+            conn.execute("UPDATE scenes SET completeness_at = ? WHERE id = ?", (stamp, scene_id))
+        return scene_recall_for(scene_id)
+
+    @app.get("/api/scenes/{scene_id}/recall", tags=["полнота"])
+    def recall(scene_id: int) -> dict:
+        """Полнота по сцене: общая и по классам, при порогах 0.25 и 0.4."""
+        get_scene(scene_id)
+        return scene_recall_for(scene_id)
+
     # ---------- сверка с реестром техники ----------
 
     @app.post("/api/scenes/{scene_id}/inventory", tags=["реестр"])
@@ -379,7 +481,7 @@ def create_app(
     return app
 
 
-def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
+def render_report(scene: dict, rows: list, min_conf: float = 0.0, recall: dict | None = None) -> str:
     e = html.escape
     status_ru = {"pending": "не проверено", "confirmed": "подтверждено", "rejected": "отклонено"}
     size_ru = {"ok": "габариты сходятся", "borderline": "на границе допуска",
@@ -410,6 +512,7 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0) -> str:
         )
 
     table = "".join(row_html(r) for r in rows)
+    recall_html = render_recall(recall)
     bounds = scene["bounds_wgs84"]
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>Отчёт — {e(scene['filename'])}</title>
@@ -433,6 +536,7 @@ th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px sol
 </table>
 <h2>Объекты по классам (уверенность ≥ {min_conf:.2f}, без отклонённых)</h2>
 <table><tr><th>Класс</th><th>Количество</th></tr>{counts}</table>
+{recall_html}
 <img src="/api/scenes/{scene['id']}/preview.png" alt="превью сцены">
 <h2>Перечень обнаружений</h2>
 <table><tr><th>ID</th><th>Класс</th><th>Модель</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Геометрия</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
@@ -440,3 +544,29 @@ th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px sol
 
 
 app = create_app()
+
+
+def render_recall(recall: dict | None) -> str:
+    e = html.escape
+    if not recall:
+        return ""
+    if not recall["complete"]:
+        return ('<h2>Полнота</h2><div class="muted">Не определена: оператор не отметил, что все пропущенные '
+                'моделью объекты размечены. Без этого известна только точность.</div>')
+    keys = list(recall["total"]["recall"])
+
+    def cell(value) -> str:
+        return "<td>—</td>" if value is None else f"<td>{value:.3f}</td>"
+
+    def line(name: str, block: dict, tag: str = "td") -> str:
+        values = "".join(cell(block["recall"][k]) for k in keys)
+        return f"<tr><{tag}>{e(name)}</{tag}><td>{block['exist']}</td><td>{block['missed']}</td>{values}</tr>"
+
+    heads = "".join(f"<th>Полнота, уверенность ≥ {k}</th>" for k in keys)
+    body = "".join(line(c, b) for c, b in recall["by_class"].items()) + line("Всего", recall["total"], "th")
+    return (
+        "<h2>Полнота</h2>"
+        '<div class="muted">Оператор просмотрел всю сцену и отметил пропущенные объекты. '
+        "Существует = подтверждённые обнаружения + отмеченные пропуски.</div>"
+        f"<table><tr><th>Класс</th><th>Существует</th><th>Пропущено</th>{heads}</tr>{body}</table>"
+    )
