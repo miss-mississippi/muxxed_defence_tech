@@ -39,7 +39,7 @@ def test_tile_windows_cover_scene_with_full_tiles(size):
 
 
 def test_merge_prefers_full_box_over_truncated_duplicate():
-    # тайлы [0..1024] и [824..1848] по x; объект 1000..1100 обрезан в левом тайле
+    # tiles [0..1024] and [824..1848] along x; the object at 1000..1100 is cut off in the left tile
     left = ((0, 0, 1024, 1024), [box(1000, 100, 1024, 140, conf=0.9)])
     right = ((824, 0, 1024, 1024), [box(1000, 100, 1100, 140, conf=0.7)])
     merged = merge_tiles([left, right], scene_size=(1848, 1024))
@@ -55,8 +55,8 @@ def test_merge_keeps_overlaps_inside_one_tile_and_other_classes():
 
 def test_refinement_keeps_types_only_where_general_model_sees_object():
     plane = box(100, 100, 200, 140, cls=0, conf=0.80, model="dota")
-    typed = box(105, 100, 205, 140, cls=3, conf=0.70, model="mar20")   # тот же самолёт
-    ghost = box(900, 900, 960, 950, cls=16, conf=0.71, model="mar20")  # кран в порту
+    typed = box(105, 100, 205, 140, cls=3, conf=0.70, model="mar20")   # the same aircraft
+    ghost = box(900, 900, 960, 950, cls=16, conf=0.71, model="mar20")  # a port crane
 
     kept = apply_refinement([plane, typed, ghost], {"mar20"})
     assert kept == [plane, typed]
@@ -65,14 +65,14 @@ def test_refinement_keeps_types_only_where_general_model_sees_object():
 
 
 def test_cross_tile_merge_ignores_class_for_type_models():
-    # один самолёт на перекрытии: из одного тайла C-17, из соседнего C-5
+    # one aircraft in the overlap: C-17 from one tile, C-5 from the neighbouring one
     left = ((0, 0, 1024, 1024), [box(900, 100, 1000, 140, cls=2, conf=0.77, model="mar20")])
     right = ((824, 0, 1024, 1024), [box(900, 100, 1000, 140, cls=3, conf=0.55, model="mar20")])
     scene = (1848, 1024)
 
-    assert len(merge_tiles([left, right], scene)) == 2  # по умолчанию классы разные — не склеиваем
+    assert len(merge_tiles([left, right], scene)) == 2  # by default different classes are not merged
     merged = merge_tiles([left, right], scene, agnostic_models={"mar20"})
-    assert len(merged) == 1 and merged[0].class_id == 2  # остаётся более уверенная
+    assert len(merged) == 1 and merged[0].class_id == 2  # the more confident one stays
 
 
 def test_predict_offset_and_rgb(detector, boats_rgb):
@@ -88,7 +88,7 @@ def test_predict_offset_and_rgb(detector, boats_rgb):
 
 def test_scene_geojson_matches_affine(detector, utm_uint16_tif):
     result = detect_scene(detector, utm_uint16_tif)
-    raw = detect_scene(detector, utm_uint16_tif, ios_threshold=1.01)  # без склейки
+    raw = detect_scene(detector, utm_uint16_tif, ios_threshold=1.01)  # no merging
     assert result.georeferenced and result.tiles_total == 6
     assert 100 < len(result.detections) <= len(raw.detections)
     assert result.gsd_m == pytest.approx(UTM_PIXEL_M, rel=0.01)
@@ -101,21 +101,21 @@ def test_scene_geojson_matches_affine(detector, utm_uint16_tif):
         ring = feature["geometry"]["coordinates"][0]
         assert len(ring) == 5 and ring[0] == ring[-1]
         expected = np.array([to_wgs.transform(*(transform @ tuple(p))) for p in props["polygon_px"]])
-        for corner in ring[:4]:  # порядок углов меняет orient(), сравниваем с ближайшим; 2e-7° ≈ 2 см
+        for corner in ring[:4]:  # orient() reorders corners, so compare with the nearest; 2e-7 deg is about 2 cm
             assert np.abs(expected - corner).max(axis=1).min() < 2e-7
         assert west <= props["center_lon"] <= east and south <= props["center_lat"] <= north
         assert props["length_m"] == pytest.approx(max(props["w"], props["h"]) * UTM_PIXEL_M, rel=0.02)
 
 
 def test_two_models_tag_and_deduplicate(boats_rgb):
-    # две «разные» модели из одних весов: каждый объект находится дважды
+    # two "different" models from the same weights: every object is found twice
     registry = ModelRegistry([ModelSpec("general", DEFAULT_WEIGHTS, 0), ModelSpec("special", DEFAULT_WEIGHTS, 1)])
     raw = registry.predict(boats_rgb, rgb=True)
     assert {d.model for d in raw} == {"general", "special"}
 
     merged = suppress_cross_model(raw, registry.priorities)
     assert len(merged) == len(raw) // 2
-    assert {d.model for d in merged} == {"special"}  # выигрывает приоритетная модель
+    assert {d.model for d in merged} == {"special"}  # the higher-priority model wins
 
 
 def test_scene_without_georeference(detector):
@@ -134,11 +134,11 @@ def test_render_preview(utm_uint16_tif):
 
 
 def test_dark_water_is_not_empty(detector, tmp_path, boats_rgb):
-    data = np.zeros((3, 1024, 3072), np.uint16)  # x 0..1024 — нули (нет данных)
-    data[:, :, 1024:2048] = 300  # тёмная вода: после растяжки 0, но это данные
+    data = np.zeros((3, 1024, 3072), np.uint16)  # x 0..1024 is zeros (no data)
+    data[:, :, 1024:2048] = 300  # dark water: 0 after stretching, but it is data
     data[:, :, 2048:] = boats_rgb[:1024, :1024].transpose(2, 0, 1).astype(np.uint16) * 40 + 300
     path = tmp_path / "dark_water.tif"
-    # 300 км от осевого меридиана UTM → снимок повёрнут в EPSG:3857, углы превью вне снимка
+    # 300 km from the UTM central meridian -> the image is rotated in EPSG:3857, preview corners fall outside it
     with rasterio.open(
         path, "w", driver="GTiff", width=3072, height=1024, count=3, dtype="uint16",
         crs=UTM_CRS, transform=from_origin(300000.0, 5670000.0, 0.5, 0.5),
@@ -146,9 +146,9 @@ def test_dark_water_is_not_empty(detector, tmp_path, boats_rgb):
         dst.write(data)
 
     result = detect_scene(detector, path)
-    assert result.tiles_total == 4 and result.tiles_skipped == 1  # пропущен только тайл из нулей
+    assert result.tiles_total == 4 and result.tiles_skipped == 1  # only the all-zero tile is skipped
 
     rgba, _ = render_preview(path, max_size=512)
     h, w = rgba.shape[:2]
-    assert rgba[h // 2, w // 2, 3] == 255  # тёмная вода непрозрачна
-    assert rgba[0, 0, 3] == 0  # угол за контуром перепроецированного снимка прозрачен
+    assert rgba[h // 2, w // 2, 3] == 255  # dark water is opaque
+    assert rgba[0, 0, 3] == 0  # the corner outside the reprojected footprint is transparent

@@ -1,4 +1,4 @@
-"""Обёртка над YOLO-OBB: загрузка весов и инференс в формате Detection."""
+"""YOLO-OBB wrapper: loads weights and returns predictions as Detection objects."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,28 +38,28 @@ class Detector:
     ):
         weights = Path(weights)
         if not weights.exists():
-            # официальные веса ultralytics скачиваются по имени файла из GitHub releases
+            # official ultralytics weights are downloaded by file name from GitHub releases
             weights.parent.mkdir(parents=True, exist_ok=True)
             attempt_download_asset(weights)
         self.weights = weights
-        self.name = name or weights.stem  # попадает в поле model каждой детекции
+        self.name = name or weights.stem  # stored in the model field of every detection
         self.model = YOLO(str(weights), task="obb")
         self.names: dict[int, str] = self.model.names
         self.device = device or pick_device()
         self.imgsz = imgsz
         self.conf = conf
         self.iou = iou
-        self.agnostic_nms = agnostic_nms  # для моделей типов техники: объект не бывает двух типов сразу
+        self.agnostic_nms = agnostic_nms  # for type models: an object cannot be two types at once
         self.last_speed: dict[str, float] = {}
 
     def predict(
         self, image: ImageInput, offset: tuple[float, float] = (0, 0), rgb: bool = False
     ) -> list[Detection]:
-        """Детекции на одном изображении/тайле.
+        """Detections on a single image or tile.
 
-        image  — путь к файлу или np.ndarray HxWx3 uint8 (по умолчанию BGR, как cv2.imread;
-                 для массивов из rasterio/PIL передать rgb=True).
-        offset — (x0, y0) левого верхнего угла тайла в пикселях сцены.
+        image  -- file path or an HxWx3 uint8 np.ndarray (BGR by default, as from cv2.imread;
+                  pass rgb=True for arrays coming from rasterio/PIL).
+        offset -- (x0, y0) of the tile's top-left corner in scene pixels.
         """
         return self.predict_batch([image], [offset], rgb=rgb)[0]
 
@@ -71,7 +71,7 @@ class Detector:
     ) -> list[list[Detection]]:
         offsets = list(offsets) if offsets is not None else [(0, 0)] * len(images)
         if len(offsets) != len(images):
-            raise ValueError("число offsets должно совпадать с числом изображений")
+            raise ValueError("the number of offsets must match the number of images")
         prepared = [self._prepare(im, rgb) for im in images]
         results = self.model.predict(
             prepared,
@@ -90,10 +90,10 @@ class Detector:
         if isinstance(image, (str, Path)):
             return str(image)
         if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("ожидается np.ndarray формы HxWx3")
+            raise ValueError("expected an np.ndarray of shape HxWx3")
         if image.dtype != np.uint8:
             raise ValueError(
-                f"ожидается uint8, пришёл {image.dtype}: 16-битные снимки сначала растянуть в 0..255"
+                f"expected uint8, got {image.dtype}: stretch 16-bit imagery to 0..255 first"
             )
         return np.ascontiguousarray(image[..., ::-1]) if rgb else image
 

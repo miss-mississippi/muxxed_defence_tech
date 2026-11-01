@@ -8,7 +8,7 @@ from conftest import SAMPLE
 @pytest.fixture(scope="module")
 def client(tmp_path_factory):
     app = create_app(data_dir=tmp_path_factory.mktemp("data"))
-    with TestClient(app) as c:  # фоновые задачи TestClient выполняет до возврата ответа
+    with TestClient(app) as c:  # TestClient runs background tasks before returning the response
         yield c
 
 
@@ -72,7 +72,7 @@ def test_scene_catalog_and_review_flow(client, utm_uint16_tif):
     preview = client.get(f"/api/scenes/{scene_id}/preview.png")
     assert preview.status_code == 200 and preview.content[:4] == b"\x89PNG"
     report = client.get(f"/api/scenes/{scene_id}/report")
-    assert report.status_code == 200 and "marina.tif" in report.text and "подтверждено: 1" in report.text
+    assert report.status_code == 200 and "marina.tif" in report.text and "confirmed: 1" in report.text
 
 
 def test_delete_scene_removes_its_detections(client, utm_uint16_tif):
@@ -108,7 +108,7 @@ def test_inventory_endpoint(client, utm_uint16_tif):
     r = client.post(f"/api/scenes/{scene_id}/inventory", json=doc)
     assert r.status_code == 200
     line = r.json()["airfields"][0]["types"][0]
-    # модели типов в тестовом приложении нет: честный ответ «не распознаёт», а не «не обнаружено»
+    # the test app has no type model, so the honest answer is "not recognised", not "not seen"
     assert line["type"] == "C-17" and line["status"] == "unrecognizable"
     assert client.post(f"/api/scenes/{scene_id}/inventory", json={"airfields": []}).status_code == 422
     assert client.post("/api/scenes/999999/inventory", json=doc).status_code == 404
@@ -123,7 +123,7 @@ def test_missed_objects_and_recall(client, utm_uint16_tif):
     feats = client.get("/api/detections", params={"scene_id": scene_id}).json()["features"]
     polys = [shape(f["geometry"]) for f in feats]
 
-    # свободная точка внутри снимка, не попадающая ни в одно обнаружение
+    # a free point inside the image that falls into no detection
     west, south, east, north = scene["bounds_wgs84"]
     free = next(
         (lon, lat)
@@ -137,7 +137,7 @@ def test_missed_objects_and_recall(client, utm_uint16_tif):
     assert r.status_code == 201 and r.json()["geometry"]["type"] == "Point"
     missed_id = r.json()["id"]
 
-    # поверх найденного объекта — это не пропуск
+    # on top of a found object: that is not a miss
     c = feats[0]["properties"]
     assert client.post(url, json={"class_name": "ship", "lon": c["center_lon"], "lat": c["center_lat"]}).status_code == 409
     assert client.post(url, json={"class_name": "ship", "lon": 0.0, "lat": 0.0}).status_code == 422
@@ -146,18 +146,18 @@ def test_missed_objects_and_recall(client, utm_uint16_tif):
 
     assert len(client.get(url).json()["features"]) == 1
 
-    # до отметки о полноте — только верхняя оценка
+    # before completeness is marked, only an upper bound
     rec = client.get(f"/api/scenes/{scene_id}/recall").json()
     assert rec["complete"] is False and rec["total"]["missed"] == 1
     rec = client.put(f"/api/scenes/{scene_id}/completeness", json={"complete": True}).json()
-    assert rec["complete"] is True and not any("верхняя" in w for w in rec["warnings"])
-    assert "Полнота" in client.get(f"/api/scenes/{scene_id}/report").text
+    assert rec["complete"] is True and not any("upper bound" in w for w in rec["warnings"])
+    assert "Recall" in client.get(f"/api/scenes/{scene_id}/report").text
 
     assert client.delete(f"/api/missed/{missed_id}").status_code == 204
     assert client.delete(f"/api/missed/{missed_id}").status_code == 404
     assert client.get(url).json()["features"] == []
 
-    # удаление сцены забирает и её отметки
+    # deleting a scene removes its marks too
     client.post(url, json={"class_name": "ship", "lon": free[0], "lat": free[1]})
     assert client.delete(f"/api/scenes/{scene_id}").status_code == 204
     assert client.get(url).status_code == 404

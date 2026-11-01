@@ -1,21 +1,21 @@
-"""Сверка типа с измеренными габаритами.
+"""Checking the predicted type against the measured size.
 
-Сцена геопривязана, масштаб пикселя известен, поэтому размеры объекта считаются в метрах.
-Самолёт заявленного типа не может быть вдвое меньше паспортного — на этом и строится проверка.
-Так отсеялся C-5 Galaxy с габаритами 38.8 x 35.6 м при паспортных 75.5 x 67.9 м.
+The scene is georeferenced and the pixel size is known, so object dimensions are measured in metres.
+An aircraft of the claimed type cannot be half its reference size; the check is built on that.
+This is how a "C-5 Galaxy" measuring 38.8 x 35.6 m against the reference 75.5 x 67.9 m was caught.
 
-Совпадение размеров типа не доказывает: Boeing 767 (48.5 x 47.6 м) неотличим по габаритам
-от E-8 на базе Boeing 707 (46.6 x 44.4 м). Ловятся только грубые промахи, поэтому
-вердикта три: габариты сходятся, на границе допуска, тип не подтверждён.
+Matching dimensions do not prove the type: a Boeing 767 (48.5 x 47.6 m) is indistinguishable by size
+from an E-8 built on the Boeing 707 airframe (46.6 x 44.4 m). Only gross errors are caught, hence
+three verdicts: size matches, borderline, type not confirmed.
 
-Эталоны — открытые справочники: длина фюзеляжа и размах крыла.
+Reference values come from public sources: fuselage length and wingspan.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-# длина фюзеляжа и размах крыла, метры; span_swept — размах со сложенным крылом
-# для машин с изменяемой геометрией (Ту-160, B-1B, Ту-22М, Су-24)
+# fuselage length and wingspan in metres; span_swept is the span with wings fully swept
+# for variable-sweep aircraft (Tu-160, B-1B, Tu-22M, Su-24)
 REFERENCE: dict[str, tuple[float, float, float | None]] = {
     "SU-35":  (21.9, 15.3, None),
     "SU-34":  (23.3, 14.7, None),
@@ -39,16 +39,16 @@ REFERENCE: dict[str, tuple[float, float, float | None]] = {
     "KC-10":  (55.4, 50.4, None),
 }
 
-OK = "ok"                    # габариты совпадают с паспортными
-BORDERLINE = "borderline"    # расхождение заметное, но объяснимое условиями съёмки
-MISMATCH = "mismatch"        # габариты не сходятся — тип не подтверждён геометрией
-UNKNOWN = "unknown"          # нет эталона для класса или нет геопривязки
+OK = "ok"                    # dimensions match the reference
+BORDERLINE = "borderline"    # noticeable deviation, still explainable by imaging conditions
+MISMATCH = "mismatch"        # dimensions do not match: the type is not confirmed by size
+UNKNOWN = "unknown"          # no reference for the class, or no georeferencing
 
 
 @dataclass(frozen=True)
 class SizeCheck:
     verdict: str
-    deviation: float | None = None       # наибольшее относительное отклонение, 0.48 = 48%
+    deviation: float | None = None       # largest relative deviation, 0.48 = 48%
     expected_long: tuple[float, float] | None = None
     expected_short: tuple[float, float] | None = None
 
@@ -58,21 +58,21 @@ class SizeCheck:
 
     def describe(self) -> str:
         if self.verdict == UNKNOWN:
-            return "размер не проверялся"
+            return "size not checked"
         assert self.expected_long and self.expected_short
         span = f"{self.expected_long[0]:.0f}–{self.expected_long[1]:.0f}" \
             if self.expected_long[0] != self.expected_long[1] else f"{self.expected_long[0]:.0f}"
         if self.verdict == OK:
-            return f"габариты соответствуют типу (ожидается ~{span} м по длинной оси)"
+            return f"size matches the type (expected ~{span} m along the long axis)"
         if self.verdict == BORDERLINE:
-            return (f"на границе допуска: расхождение {self.deviation:.0%} "
-                    f"(ожидается ~{span} м по длинной оси)")
-        return (f"тип не подтверждён геометрией: расхождение {self.deviation:.0%} "
-                f"с паспортным размером (ожидается ~{span} м по длинной оси)")
+            return (f"borderline: {self.deviation:.0%} off the reference "
+                    f"(expected ~{span} m along the long axis)")
+        return (f"type not confirmed by size: {self.deviation:.0%} off "
+                f"the reference (expected ~{span} m along the long axis)")
 
 
 def _bounds(length: float, span: float, span_swept: float | None) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Допустимые длинная и короткая оси с учётом всех положений крыла."""
+    """Allowed long- and short-axis ranges across all wing positions."""
     configs = [(length, span)] + ([(length, span_swept)] if span_swept else [])
     longs = [max(a, b) for a, b in configs]
     shorts = [min(a, b) for a, b in configs]
@@ -93,12 +93,12 @@ def check_size(
     tolerance: float = 0.25,
     borderline: float = 0.15,
 ) -> SizeCheck:
-    """Сверяет измеренные габариты с паспортными для типа.
+    """Compares the measured dimensions with the reference dimensions for the type.
 
-    Градаций три, а не порог: двоичный ответ у самой границы вводит в заблуждение
-    в обе стороны. До borderline (15%) расхождение объясняется ошибкой бокса, тенью
-    и точностью геопривязки; от borderline до tolerance (25%) оно заметное, но само
-    по себе ошибкой типа не является; дальше тип считается неподтверждённым.
+    Three grades instead of a single threshold: a binary answer right at the boundary misleads
+    in both directions. Up to `borderline` (15%) the deviation is explained by box error, shadows
+    and georeferencing accuracy; between `borderline` and `tolerance` (25%) it is noticeable but
+    not by itself a type error; beyond that the type is considered not confirmed.
     """
     reference = REFERENCE.get(class_name)
     if reference is None or length_m is None or width_m is None:
@@ -116,7 +116,7 @@ def check_size(
 
 
 def annotate(properties: dict, tolerance: float = 0.25, borderline: float = 0.15) -> dict:
-    """Добавляет к свойствам детекции результат проверки габаритами (на месте)."""
+    """Adds the size-check result to the detection properties (in place)."""
     check = check_size(
         properties.get("class_name", ""), properties.get("length_m"), properties.get("width_m"),
         tolerance, borderline,

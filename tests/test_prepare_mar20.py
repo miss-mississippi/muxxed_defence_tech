@@ -42,7 +42,7 @@ def test_size_falls_back_to_image(mar20_root, tmp_path):
     width, height, objects = prepare_mar20.parse_obb_xml(xml, mar20_root / "JPEGImages" / "7.jpg")
     assert (width, height) == (800, 400) and len(objects) == 2
     with pytest.raises(ValueError):
-        prepare_mar20.parse_obb_xml(xml, mar20_root / "JPEGImages" / "нет.jpg")
+        prepare_mar20.parse_obb_xml(xml, mar20_root / "JPEGImages" / "missing.jpg")
 
 
 def test_convert_mar20(mar20_root, tmp_path):
@@ -53,9 +53,9 @@ def test_convert_mar20(mar20_root, tmp_path):
 
     label = (out / "labels" / "test" / "7.txt").read_text().splitlines()
     cls, *coords = label[0].split()
-    assert cls == "13"  # A14 → KC-135
+    assert cls == "13"  # A14 -> KC-135
     assert np.allclose([float(v) for v in coords], [0.5, 0.5, 0.7, 0.5, 0.7, 0.75, 0.5, 0.75])
-    assert float(label[1].split()[1]) == 0.0  # координаты за краем обрезаны до [0, 1]
+    assert float(label[1].split()[1]) == 0.0  # coordinates outside the image are clipped to [0, 1]
 
     assert (out / "images" / "test" / "7.jpg").exists()
     yaml = (out / "mar20.yaml").read_text()

@@ -1,4 +1,4 @@
-"""Детекция на целой сцене: GeoTIFF/JPG/PNG → тайлы → YOLO-OBB → склейка → GeoJSON (WGS84)."""
+"""Whole-scene detection: GeoTIFF/JPG/PNG -> tiles -> YOLO-OBB -> merge -> GeoJSON (WGS84)."""
 from __future__ import annotations
 
 import time
@@ -27,7 +27,7 @@ from .schema import Detection
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 GEOD = Geod(ellps="WGS84")
-# веса DOTA обучены на снимках ~0.1–1 м/px; на более грубых самолёты и суда теряются
+# the DOTA weights were trained on ~0.1-1 m/px imagery; at coarser resolution aircraft and ships are lost
 MAX_RECOMMENDED_GSD_M = 2.0
 
 
@@ -75,10 +75,10 @@ class SceneResult:
 
 
 def tile_windows(width: int, height: int, tile: int = 1024, overlap: int = 200) -> list[tuple[int, int, int, int]]:
-    """Окна (x0, y0, w, h), покрывающие сцену. Последний ряд/столбец прижат к краю сцены,
-    поэтому все тайлы полного размера и модель их не растягивает."""
+    """Windows (x0, y0, w, h) covering the scene. The last row/column is snapped to the scene edge,
+    so every tile is full-size and the model never has to resize it."""
     if not 0 <= overlap < tile:
-        raise ValueError("нужно 0 <= overlap < tile")
+        raise ValueError("expected 0 <= overlap < tile")
 
     def starts(size: int) -> list[int]:
         if size <= tile:
@@ -99,7 +99,7 @@ def is_georeferenced(src) -> bool:
 
 
 def rgb_bands(src) -> list[int]:
-    """Номера каналов R, G, B (1-based) по цветовой интерпретации, иначе первые три / один."""
+    """Band numbers for R, G, B (1-based) from the colour interpretation, otherwise the first three / one."""
     idx = {ci: i + 1 for i, ci in enumerate(src.colorinterp)}
     if all(c in idx for c in (ColorInterp.red, ColorInterp.green, ColorInterp.blue)):
         return [idx[ColorInterp.red], idx[ColorInterp.green], idx[ColorInterp.blue]]
@@ -115,8 +115,8 @@ def _read_scaled(ds, bands: list[int], max_size: int) -> np.ndarray:
 
 
 def stretch_limits(src, bands: list[int], sample_size: int = 2048) -> tuple[np.ndarray, np.ndarray] | None:
-    """Растяжка 2–98 перцентиль по уменьшенной копии всей сцены — одна на все тайлы,
-    иначе контраст скачет от тайла к тайлу. uint8-снимки не трогаем."""
+    """2-98 percentile stretch computed on a downsampled copy of the whole scene, shared by all tiles;
+    otherwise contrast jumps from tile to tile. uint8 imagery is left untouched."""
     if all(src.dtypes[b - 1] == "uint8" for b in bands):
         return None
     data = _read_scaled(src, bands, sample_size).astype(np.float32)
@@ -130,7 +130,7 @@ def stretch_limits(src, bands: list[int], sample_size: int = 2048) -> tuple[np.n
 
 
 def to_uint8(data: np.ndarray, limits: tuple[np.ndarray, np.ndarray] | None) -> np.ndarray:
-    """(C, H, W) из rasterio → HxWx3 uint8 RGB."""
+    """(C, H, W) from rasterio -> HxWx3 uint8 RGB."""
     if data.shape[0] == 1:
         data = np.repeat(data, 3, axis=0)
     img = np.transpose(data, (1, 2, 0))
@@ -166,7 +166,7 @@ def detect_scene(
             for x, y, w, h in windows[start : start + batch]:
                 window = Window(x, y, w, h)
                 raw = src.read(bands, window=window)
-                # пустоту считаем по маске и сырым данным: тёмная вода после растяжки тоже 0, но это не пусто
+                # emptiness is judged by the mask and raw values: dark water is also 0 after stretching, but it is data
                 valid = (src.dataset_mask(window=window) > 0) & (raw.max(axis=0) > 0)
                 if valid.mean() < 0.05:
                     skipped += 1
@@ -203,11 +203,11 @@ def detect_scene(
             result.gsd_m = round(_gsd_m(src, to_wgs), 3)
             if result.gsd_m > MAX_RECOMMENDED_GSD_M:
                 result.warnings.append(
-                    f"разрешение {result.gsd_m} м/px грубее {MAX_RECOMMENDED_GSD_M} м/px — "
-                    "модель рассчитана на детальные снимки, возможны пропуски"
+                    f"resolution {result.gsd_m} m/px is coarser than {MAX_RECOMMENDED_GSD_M} m/px; "
+                    "the model is built for high-resolution imagery, objects may be missed"
                 )
         else:
-            result.warnings.append("снимок без геопривязки — координаты только в пикселях")
+            result.warnings.append("image is not georeferenced: coordinates are in pixels only")
         result.features = [_feature(i, d, src.transform, to_wgs) for i, d in enumerate(detections)]
 
     result.elapsed_s = round(time.perf_counter() - t0, 2)
@@ -242,27 +242,27 @@ def _feature(idx: int, det: Detection, transform, to_wgs: Transformer | None) ->
             center_lat=round(float(clat), 7),
             length_m=round(max(len01, len12), 1),
             width_m=round(min(len01, len12), 1),
-            orientation_deg=round(long_az % 180, 1),  # азимут длинной оси, 0–180
+            orientation_deg=round(long_az % 180, 1),  # azimuth of the long axis, 0-180
         )
-    annotate(props)  # сверка габаритов с паспортными для типа
+    annotate(props)  # compare measured size with the reference size for the type
     return {"type": "Feature", "id": idx, "geometry": geometry, "properties": props}
 
 
 def render_preview(
     path: str | Path, max_size: int = 2048, bands: list[int] | None = None
 ) -> tuple[np.ndarray, list[list[float]] | None]:
-    """Превью для карты: RGBA uint8 и границы Leaflet [[south, west], [north, east]].
-    Геопривязанная сцена перепроецируется в EPSG:3857 — так она точно ложится на подложку.
-    Без геопривязки границы None (карта работает в пикселях)."""
+    """Map preview: RGBA uint8 plus Leaflet bounds [[south, west], [north, east]].
+    A georeferenced scene is reprojected to EPSG:3857 so it lines up exactly with the basemap.
+    Without georeferencing the bounds are None (the map works in pixels)."""
     with open_raster(path) as src:
         bands = bands or rgb_bands(src)
         limits = stretch_limits(src, bands)
         if is_georeferenced(src):
-            # без nodata и альфа-канала GDAL не знает, где кончается снимок, — просим добавить альфу
+            # without nodata or an alpha band GDAL cannot tell where the image ends, so ask it to add alpha
             add_alpha = src.nodata is None and ColorInterp.alpha not in src.colorinterp
             with WarpedVRT(src, crs="EPSG:3857", resampling=Resampling.bilinear, add_alpha=add_alpha) as vrt:
                 data = _read_scaled(vrt, bands, max_size)
-                # прозрачность — по маске валидных данных (за контуром снимка), а не по чёрным пикселям
+                # transparency follows the valid-data mask (outside the image footprint), not black pixels
                 alpha = vrt.dataset_mask(out_shape=data.shape[1:])
                 west, south, east, north = transform_bounds("EPSG:3857", "EPSG:4326", *vrt.bounds)
             bounds = [[south, west], [north, east]]

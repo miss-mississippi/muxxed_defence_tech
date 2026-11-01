@@ -1,11 +1,11 @@
-"""Склейка детекций с перекрывающихся тайлов.
+"""Merging detections from overlapping tiles.
 
-Объект на перекрытии находится в двух тайлах, а у края тайла ещё и обрезан:
-IoU полного и обрезанного бокса низкий, и обычный NMS такой дубль не убирает.
-Поэтому сравниваем IoS — площадь пересечения / площадь меньшего полигона —
-и только между детекциями из разных тайлов (внутри тайла NMS уже сделала модель).
-При конфликте выигрывает детекция, не касающаяся внутренней границы своего тайла,
-затем — более уверенная.
+An object in the overlap is found in two tiles, and at the tile edge it is also truncated:
+the IoU between the full and the truncated box is low, so plain NMS does not remove the duplicate.
+We therefore compare IoS (intersection area / area of the smaller polygon), and only between
+detections from different tiles (within a tile the model has already applied NMS).
+On conflict, the detection that does not touch an inner edge of its tile wins, then the more
+confident one.
 """
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ from shapely.geometry import Polygon
 
 from .schema import Detection
 
-Window = tuple[int, int, int, int]  # x0, y0, w, h в пикселях сцены
+Window = tuple[int, int, int, int]  # x0, y0, w, h in scene pixels
 
 
 def touches_inner_edge(
     det: Detection, window: Window, scene_size: tuple[int, int], margin: float = 4.0
 ) -> bool:
-    """Касается ли бокс границы тайла, за которой сцена продолжается (объект мог быть обрезан)."""
+    """Whether the box touches a tile edge beyond which the scene continues (the object may be cut off)."""
     x0, y0, w, h = window
     width, height = scene_size
     xs = [p[0] for p in det.polygon]
@@ -40,10 +40,10 @@ def merge_tiles(
     edge_margin: float = 4.0,
     agnostic_models: set[str] | None = None,
 ) -> list[Detection]:
-    """tiles — [(окно тайла, детекции в пикселях сцены)], scene_size — (width, height).
+    """tiles -- [(tile window, detections in scene pixels)], scene_size -- (width, height).
 
-    agnostic_models — модели, у которых при склейке класс не сравнивается: для моделей типов
-    техники один объект не может быть двух типов сразу (C-17 из одного тайла, C-5 из соседнего)."""
+    agnostic_models -- models whose class is ignored when merging: for type models one object
+    cannot be two types at once (C-17 from one tile, C-5 from the neighbouring one)."""
     dets: list[Detection] = []
     tile_ids: list[int] = []
     at_edge: list[bool] = []
@@ -55,7 +55,7 @@ def merge_tiles(
     if len(tiles) < 2 or len(dets) < 2:
         return dets
 
-    polys = [Polygon(d.polygon).buffer(0) for d in dets]  # buffer(0) чинит самопересечения
+    polys = [Polygon(d.polygon).buffer(0) for d in dets]  # buffer(0) repairs self-intersections
     tree = STRtree(polys)
     order = sorted(range(len(dets)), key=lambda i: (at_edge[i], -dets[i].confidence))
     suppressed = [False] * len(dets)
@@ -79,9 +79,9 @@ def merge_tiles(
 def apply_refinement(
     detections: list[Detection], refine_only: set[str], ios_threshold: float = 0.6
 ) -> list[Detection]:
-    """Уточняющая модель (например, типы военных самолётов) знает только свои классы и вне своей
-    области «узнаёт» объекты там, где их нет: на кранах и контейнерах порта. Поэтому её детекции
-    оставляем лишь там, где тот же объект нашла общая модель."""
+    """A refining model (e.g. military aircraft types) knows only its own classes, and outside its
+    domain it "recognises" objects that are not there: in port cranes and containers. So its
+    detections are kept only where the general model found the same object."""
     if not refine_only:
         return detections
     base = [d for d in detections if d.model not in refine_only]
@@ -107,9 +107,9 @@ def apply_refinement(
 def suppress_cross_model(
     detections: list[Detection], priorities: dict[str, int], ios_threshold: float = 0.6
 ) -> list[Detection]:
-    """Один объект, найденный разными моделями (общая DOTA — «plane», специализированная — «SU-34»),
-    оставляем один раз: побеждает модель с большим приоритетом, при равном — уверенность.
-    Классы не сравниваем: у моделей разные наборы классов, сопоставлять их нечем."""
+    """One object found by different models (general DOTA says "plane", the specialised one "SU-34")
+    is kept once: the model with the higher priority wins, ties are broken by confidence.
+    Classes are not compared: the models have different class sets, there is nothing to match them by."""
     if len(detections) < 2 or len(priorities) < 2:
         return detections
     polys = [Polygon(d.polygon).buffer(0) for d in detections]

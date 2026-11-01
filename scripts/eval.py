@@ -1,9 +1,9 @@
-"""Оценка модели YOLO-OBB: mAP50, mAP50-95, precision/recall по классам, скорость инференса.
+"""YOLO-OBB evaluation: mAP50, mAP50-95, per-class precision/recall, inference speed.
 
-    python scripts/eval.py --data data/mar20_yolo/mar20.yaml --weights weights/mar20_s.pt --split test
-    python scripts/eval.py --data dota8.yaml     # smoke-тест на встроенном мини-датасете ultralytics
+    python scripts/eval.py --data data/mar20_yolo/mar20.yaml --weights weights/mar20_s_800.pt --split test
+    python scripts/eval.py --data dota8.yaml     # smoke test on the built-in ultralytics mini dataset
 
-Отчёт: outputs/eval/<веса>_<датасет>_<сплит>.json и .md (таблица для NOTES и презентации).
+Report: outputs/eval/<weights>_<dataset>_<split>.json and .md (a table ready for the notes).
 """
 from __future__ import annotations
 
@@ -79,9 +79,9 @@ def to_markdown(r: dict) -> str:
         f"**{Path(r['weights']).name}** · `{Path(r['data']).name}` / {r['split']} · imgsz {r['imgsz']} · {r['device']}",
         "",
         f"mAP50 **{r['map50']:.3f}** · mAP50-95 **{r['map50_95']:.3f}** · P {r['precision']:.3f} · R {r['recall']:.3f} · "
-        f"инференс {speed.get('inference', 0):.1f} мс/изобр. (с пре/постобработкой {sum(speed.values()):.1f} мс)",
+        f"inference {speed.get('inference', 0):.1f} ms/image ({sum(speed.values()):.1f} ms with pre/post-processing)",
         "",
-        "| Класс | Изобр. | Объектов | P | R | mAP50 | mAP50-95 |",
+        "| Class | Images | Instances | P | R | mAP50 | mAP50-95 |",
         "|---|---|---|---|---|---|---|",
     ]
     for c in r["per_class"]:
@@ -94,12 +94,12 @@ def to_markdown(r: dict) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data", required=True, help="yaml датасета YOLO-OBB")
+    p.add_argument("--data", required=True, help="YOLO-OBB dataset yaml")
     p.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
     p.add_argument("--split", default="val", choices=["train", "val", "test"])
     p.add_argument("--imgsz", type=int, default=1024)
     p.add_argument("--batch", type=int, default=8)
-    p.add_argument("--device", default=None, help="cpu | mps | 0 (по умолчанию — автовыбор)")
+    p.add_argument("--device", default=None, help="cpu | mps | 0 (auto-selected by default)")
     args = p.parse_args()
 
     report = evaluate(args.weights, args.data, args.split, args.imgsz, args.batch, args.device)

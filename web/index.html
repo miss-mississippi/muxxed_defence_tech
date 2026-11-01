@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Идентификация объектов на космоснимках</title>
+<title>Satellite Object Identification</title>
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <style>
   :root {
@@ -76,59 +76,59 @@
 <div id="app">
   <aside>
     <header>
-      <h1>Идентификация объектов на космоснимках</h1>
-      <div class="muted" id="model">подключение к API…</div>
+      <h1>Satellite Object Identification</h1>
+      <div class="muted" id="model">connecting to the API…</div>
     </header>
     <section>
-      <h2>Загрузка снимка</h2>
+      <h2>Upload an image</h2>
       <form id="upload">
         <input type="file" id="file" accept=".tif,.tiff,.jpg,.jpeg,.png">
-        <button class="primary" id="upload-btn">Обработать</button>
+        <button class="primary" id="upload-btn">Process</button>
       </form>
     </section>
     <section>
-      <h2>Сцены</h2>
-      <ul id="scenes"><li class="muted">загрузка…</li></ul>
+      <h2>Scenes</h2>
+      <ul id="scenes"><li class="muted">loading…</li></ul>
     </section>
     <section>
-      <h2>Фильтры</h2>
+      <h2>Filters</h2>
       <div id="classes"></div>
       <div class="filters">
-        <label for="conf">Уверенность ≥ <span id="conf-val">0.40</span></label>
+        <label for="conf">Confidence ≥ <span id="conf-val">0.40</span></label>
         <input type="range" id="conf" min="0" max="1" step="0.05" value="0.4">
-        <label for="status">Статус</label>
+        <label for="status">Status</label>
         <select id="status">
-          <option value="">все</option>
-          <option value="pending">не проверено</option>
-          <option value="confirmed">подтверждено</option>
-          <option value="rejected">отклонено</option>
+          <option value="">all</option>
+          <option value="pending">not reviewed</option>
+          <option value="confirmed">confirmed</option>
+          <option value="rejected">rejected</option>
         </select>
-        <label for="geom">Геометрия</label>
+        <label for="geom">Size check</label>
         <select id="geom">
-          <option value="">все</option>
-          <option value="mismatch">тип не подтверждён</option>
-          <option value="borderline">на границе допуска</option>
-          <option value="ok">габариты совпадают</option>
-          <option value="unknown">не проверялась</option>
+          <option value="">all</option>
+          <option value="mismatch">type not confirmed</option>
+          <option value="borderline">borderline</option>
+          <option value="ok">size matches</option>
+          <option value="unknown">not checked</option>
         </select>
       </div>
       <div class="links">
-        <a id="report" target="_blank" aria-disabled="true">Отчёт</a>
+        <a id="report" target="_blank" aria-disabled="true">Report</a>
         <a id="geojson" target="_blank" aria-disabled="true">GeoJSON</a>
         <a href="/docs" target="_blank">API</a>
       </div>
     </section>
     <section>
-      <h2>Полнота</h2>
+      <h2>Recall</h2>
       <div class="recall-row">
-        <button id="miss-mode" disabled>Отметить пропущенное</button>
-        <label class="muted"><input type="checkbox" id="complete" disabled> все пропуски отмечены</label>
+        <button id="miss-mode" disabled>Mark missed objects</button>
+        <label class="muted"><input type="checkbox" id="complete" disabled> all misses marked</label>
       </div>
-      <div id="recall" class="muted">откройте сцену</div>
+      <div id="recall" class="muted">open a scene</div>
     </section>
     <section class="grow">
-      <h2>Обнаружения <span id="count" class="muted"></span></h2>
-      <div class="hint muted">↑ ↓ — выбор · C — подтвердить · R — отклонить</div>
+      <h2>Detections <span id="count" class="muted"></span></h2>
+      <div class="hint muted">↑ ↓ select · C confirm · R reject</div>
       <ul id="detections"></ul>
     </section>
   </aside>
@@ -138,10 +138,10 @@
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script>
-// палитра как в ultralytics — цвета совпадают с картинками из scripts/
+// same palette as ultralytics, so colours match the images rendered by scripts/
 const PALETTE = ["042AFF","0BDBEB","F3F3F3","00DFB7","111F68","FF6FDD","FF444F","CCED00","00F344","BD00FF",
                  "00B4FF","DD00BA","00FFFF","26C000","01FFB3","7D24FF","7B0068","FF1B6C","FC6D2F","A2FF0B"].map(h => "#" + h);
-const STATUS_RU = { pending: "не проверено", confirmed: "подтверждено", rejected: "отклонено" };
+const STATUS_TEXT = { pending: "not reviewed", confirmed: "confirmed", rejected: "rejected" };
 const KZ_VIEW = [[48.0, 67.0], 5];
 
 const $ = id => document.getElementById(id);
@@ -166,7 +166,7 @@ function toast(msg) {
 const className = p => p.review_class || p.class_name;
 const colorOf = name => PALETTE[(state.classIds[name] ?? 0) % PALETTE.length];
 
-// ---------- карта ----------
+// ---------- map ----------
 
 function makeMap(georef) {
   if (state.map) state.map.remove();
@@ -175,14 +175,14 @@ function makeMap(georef) {
   const map = L.map("map", georef ? { maxZoom: 22 } : { crs: L.CRS.Simple, minZoom: -6, maxZoom: 4 });
   if (georef) {
     const esri = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      { maxZoom: 22, maxNativeZoom: 17, attribution: "Подложка © Esri World Imagery" });  // выше 17 у Esri местами заглушки
+      { maxZoom: 22, maxNativeZoom: 17, attribution: "Basemap © Esri World Imagery" });  // Esri has placeholder tiles above z17 in places
     const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 22, maxNativeZoom: 19, attribution: "© OpenStreetMap" });
     esri.addTo(map);
-    // подложки тянутся из интернета; в закрытом контуре выбирается «без подложки»
+    // basemaps come from the internet; on an isolated network choose "no basemap"
     const blank = L.layerGroup();
     L.control.layers(
-      { "Спутник (Esri)": esri, "OpenStreetMap": osm, "Без подложки (офлайн)": blank },
+      { "Satellite (Esri)": esri, "OpenStreetMap": osm, "No basemap (offline)": blank },
       {}, { position: "topright" },
     ).addTo(map);
     map.setView(...KZ_VIEW);
@@ -195,7 +195,7 @@ function makeMap(georef) {
 
 function latlngs(f) {
   if (state.scene.georeferenced) return f.geometry.coordinates[0].slice(0, -1).map(([lon, lat]) => [lat, lon]);
-  return f.properties.polygon_px.map(([x, y]) => [-y, x]);  // CRS.Simple: y вверх
+  return f.properties.polygon_px.map(([x, y]) => [-y, x]);  // CRS.Simple: y points up
 }
 
 function styleOf(p, selected) {
@@ -209,11 +209,11 @@ function styleOf(p, selected) {
   return selected ? { ...style, color: "#ffffff", weight: 4, dashArray: null, opacity: 1 } : style;
 }
 
-// ---------- сцены ----------
+// ---------- scenes ----------
 
 function sceneStatus(s) {
-  if (s.status === "processing") return `обработка ${Math.round(s.progress * 100)}%`;
-  return { queued: "в очереди", done: "готово", failed: "ошибка" }[s.status] || s.status;
+  if (s.status === "processing") return `processing ${Math.round(s.progress * 100)}%`;
+  return { queued: "queued", done: "done", failed: "failed" }[s.status] || s.status;
 }
 
 async function loadScenes() {
@@ -222,16 +222,16 @@ async function loadScenes() {
   $("scenes").innerHTML = scenes.map(s => {
     const total = Object.values(s.review || {}).reduce((a, b) => a + b, 0);
     const checked = (s.review?.confirmed || 0) + (s.review?.rejected || 0);
-    const info = s.status === "done" ? `${total} объектов · проверено ${checked}` : s.status === "failed" ? esc(s.error || "") : "";
+    const info = s.status === "done" ? `${total} objects · ${checked} reviewed` : s.status === "failed" ? esc(s.error || "") : "";
     return `<li data-id="${s.id}" class="${state.scene?.id === s.id ? "sel" : ""}">
       <span class="name">${esc(s.filename)}</span><span class="badge ${s.status}">${sceneStatus(s)}</span>
       ${info ? `<span class="muted">${info}</span>` : ""}</li>`;
-  }).join("") || `<li class="muted">пока пусто — загрузите снимок</li>`;
+  }).join("") || `<li class="muted">nothing yet: upload an image</li>`;
 
   if (state.pendingOpen) {
     const s = scenes.find(x => x.id === state.pendingOpen);
     if (s?.status === "done") { state.pendingOpen = null; openScene(s.id); }
-    if (s?.status === "failed") { state.pendingOpen = null; toast(`Ошибка обработки: ${s.error}`); }
+    if (s?.status === "failed") { state.pendingOpen = null; toast(`Processing failed: ${s.error}`); }
   }
   if (scenes.some(s => s.status === "queued" || s.status === "processing")) setTimeout(loadScenes, 1500);
 }
@@ -256,7 +256,7 @@ async function openScene(id) {
   loadMissed().catch(e => toast(e.message));
 }
 
-// ---------- обнаружения ----------
+// ---------- detections ----------
 
 function visibleFeatures() {
   const minConf = +$("conf").value, status = $("status").value, geom = $("geom").value;
@@ -275,19 +275,19 @@ function renderClasses() {
 
 function render() {
   if (!state.scene) return;
-  const minConf = $("conf").value;  // отчёт и GeoJSON — с тем же порогом, что на карте
+  const minConf = $("conf").value;  // the report and GeoJSON use the same threshold as the map
   $("report").href = `/api/scenes/${state.scene.id}/report?min_conf=${minConf}`;
   $("geojson").href = `/api/detections?scene_id=${state.scene.id}&min_conf=${minConf}`;
   renderClasses();
   const list = visibleFeatures();
   state.visibleIds = list.map(f => f.id);
-  $("count").textContent = `${list.length} из ${state.features.length}`;
+  $("count").textContent = `${list.length} of ${state.features.length}`;
 
   if (state.layer) state.layer.remove();
   state.layer = L.layerGroup().addTo(state.map);
   state.shapes.clear();
   for (const f of list) {
-    // клик по объекту не должен долетать до карты: там он означал бы «отметить пропуск»
+    // a click on an object must not reach the map, where it would mean "mark a miss"
     const shape = L.polygon(latlngs(f), { ...styleOf(f.properties, f.id === state.selected), bubblingMouseEvents: false })
       .addTo(state.layer);
     shape.on("click", () => select(f.id, false));
@@ -297,31 +297,31 @@ function render() {
   $("detections").innerHTML = list.map(({ id, properties: p }) => `
     <li class="det ${p.review_status} ${id === state.selected ? "sel" : ""}" data-id="${id}">
       <span class="dot" style="background:${colorOf(className(p))}"></span>
-      <span class="name">${esc(className(p))}${p.size_check === "mismatch" ? ` <span title="тип не подтверждён геометрией">⚠</span>` : p.size_check === "borderline" ? ` <span title="на границе допуска">≈</span>` : ""}</span>
+      <span class="name">${esc(className(p))}${p.size_check === "mismatch" ? ` <span title="type not confirmed by size">⚠</span>` : p.size_check === "borderline" ? ` <span title="borderline size">≈</span>` : ""}</span>
       <span class="num">${p.confidence.toFixed(2)}</span>
-      <span class="num">${p.length_m != null ? p.length_m.toFixed(0) + " м" : ""}</span>
-      <button class="ok" data-act="confirmed" title="Подтвердить (C)">✓</button>
-      <button class="no" data-act="rejected" title="Отклонить (R)">✗</button>
+      <span class="num">${p.length_m != null ? p.length_m.toFixed(0) + " m" : ""}</span>
+      <button class="ok" data-act="confirmed" title="Confirm (C)">✓</button>
+      <button class="no" data-act="rejected" title="Reject (R)">✗</button>
     </li>`).join("");
 }
 
 function popupHtml(f) {
   const p = f.properties;
   const where = p.center_lat != null
-    ? `${p.center_lat.toFixed(6)}, ${p.center_lon.toFixed(6)}<br>${p.length_m.toFixed(1)} × ${p.width_m.toFixed(1)} м · азимут ${p.orientation_deg.toFixed(0)}°`
-    : `пиксели: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
+    ? `${p.center_lat.toFixed(6)}, ${p.center_lon.toFixed(6)}<br>${p.length_m.toFixed(1)} × ${p.width_m.toFixed(1)} m · azimuth ${p.orientation_deg.toFixed(0)}°`
+    : `pixels: ${p.cx.toFixed(0)}, ${p.cy.toFixed(0)} · ${p.w.toFixed(0)} × ${p.h.toFixed(0)} px`;
   const options = Object.keys(state.classIds).map(n => `<option ${n === className(p) ? "selected" : ""}>${esc(n)}</option>`).join("");
-  const dev = p.size_deviation != null ? ` · расхождение ${(p.size_deviation * 100).toFixed(1)}%` : "";
+  const dev = p.size_deviation != null ? ` · ${(p.size_deviation * 100).toFixed(1)}% off the reference` : "";
   const geom = p.size_check === "mismatch"
-    ? `<br><b style="color:#b00">⚠ тип не подтверждён геометрией</b>${dev}`
-    : p.size_check === "borderline" ? `<br><b style="color:#b26a00">≈ на границе допуска</b>${dev}`
-    : p.size_check === "ok" ? `<br><span class="muted">габариты соответствуют типу</span>` : "";
+    ? `<br><b style="color:#b00">⚠ type not confirmed by size</b>${dev}`
+    : p.size_check === "borderline" ? `<br><b style="color:#b26a00">≈ borderline size</b>${dev}`
+    : p.size_check === "ok" ? `<br><span class="muted">size matches the type</span>` : "";
   return `<div class="pop"><b>${esc(className(p))}</b> · ${p.confidence.toFixed(2)} · #${f.id}<br>${where}${geom}<br>
-    Модель: ${esc(p.model || "—")}<br>
-    Статус: ${STATUS_RU[p.review_status]}${p.review_class ? ` (модель дала: ${esc(p.class_name)})` : ""}
+    Model: ${esc(p.model || "—")}<br>
+    Status: ${STATUS_TEXT[p.review_status]}${p.review_class ? ` (model said: ${esc(p.class_name)})` : ""}
     <div class="row"><select id="fix-class">${options}</select></div>
-    <div class="row"><button onclick="review(${f.id}, 'confirmed')">✓ Подтвердить</button>
-    <button onclick="review(${f.id}, 'rejected')">✗ Отклонить</button></div></div>`;
+    <div class="row"><button onclick="review(${f.id}, 'confirmed')">✓ Confirm</button>
+    <button onclick="review(${f.id}, 'rejected')">✗ Reject</button></div></div>`;
 }
 
 function select(id, pan) {
@@ -361,7 +361,7 @@ async function review(id, status) {
 }
 window.review = review;
 
-// ---------- полнота ----------
+// ---------- recall ----------
 
 function missedLatLng(f) {
   const p = f.properties;
@@ -374,9 +374,9 @@ function renderMissed() {
   for (const f of state.missed) {
     L.circleMarker(missedLatLng(f), { radius: 9, color: "#f85149", weight: 2, dashArray: "3 3",
                                       fillOpacity: 0.1, bubblingMouseEvents: false })
-      .bindPopup(`<div class="pop"><b>Пропуск: ${esc(f.properties.class_name)}</b> · #${f.id}<br>
-        модель этот объект не нашла
-        <div class="row"><button onclick="removeMissed(${f.id})">Удалить отметку</button></div></div>`)
+      .bindPopup(`<div class="pop"><b>Missed: ${esc(f.properties.class_name)}</b> · #${f.id}<br>
+        the model did not find this object
+        <div class="row"><button onclick="removeMissed(${f.id})">Remove mark</button></div></div>`)
       .addTo(state.missLayer);
   }
 }
@@ -385,11 +385,11 @@ async function loadRecall() {
   const r = await api(`/api/scenes/${state.scene.id}/recall`);
   $("complete").checked = r.complete;
   const t = r.total;
-  if (!t.exist) { $("recall").textContent = "подтверждённых объектов пока нет"; return; }
+  if (!t.exist) { $("recall").textContent = "no confirmed objects yet"; return; }
   const pct = v => (v == null ? "—" : `${Math.round(v * 100)}%`);
-  const label = r.complete ? "Полнота" : "Верхняя оценка полноты (пропуски отмечены не все)";
-  $("recall").innerHTML = `${label}: <b>${pct(t.recall["0.25"])}</b> при ≥ 0.25 · ` +
-    `<b>${pct(t.recall["0.4"])}</b> при ≥ 0.4<br>существует ${t.exist}, из них пропущено ${t.missed}`;
+  const label = r.complete ? "Recall" : "Recall upper bound (not all misses marked)";
+  $("recall").innerHTML = `${label}: <b>${pct(t.recall["0.25"])}</b> at ≥ 0.25 · ` +
+    `<b>${pct(t.recall["0.4"])}</b> at ≥ 0.4<br>${t.exist} exist, ${t.missed} of them missed`;
 }
 
 async function loadMissed() {
@@ -401,23 +401,23 @@ async function loadMissed() {
 function setMissMode(on) {
   state.missMode = on;
   $("miss-mode").classList.toggle("on", on);
-  $("miss-mode").textContent = on ? "Готово" : "Отметить пропущенное";
+  $("miss-mode").textContent = on ? "Done" : "Mark missed objects";
   state.map.getContainer().classList.toggle("miss-mode", on);
   if (on) {
-    // пропуск — объект, которого нет в каталоге вовсе, поэтому показываем весь каталог
+    // a miss is an object absent from the catalogue altogether, so show the whole catalogue
     $("conf").value = 0.25;
     $("conf-val").textContent = "0.25";
     render();
-    toast("Кликните по объекту, который модель пропустила. Порог опущен до 0.25 — виден весь каталог.");
+    toast("Click an object the model missed. The threshold is lowered to 0.25 so the whole catalogue is visible.");
   }
 }
 
 function onMapClick(e) {
   if (!state.missMode || !state.scene) return;
   const options = Object.keys(state.classIds).map(n => `<option>${esc(n)}</option>`).join("");
-  L.popup().setLatLng(e.latlng).setContent(`<div class="pop"><b>Пропущенный объект</b>
+  L.popup().setLatLng(e.latlng).setContent(`<div class="pop"><b>Missed object</b>
     <div class="row"><select id="miss-class">${options}</select></div>
-    <div class="row"><button onclick="addMissed(${e.latlng.lat}, ${e.latlng.lng})">Добавить</button></div></div>`)
+    <div class="row"><button onclick="addMissed(${e.latlng.lat}, ${e.latlng.lng})">Add</button></div></div>`)
     .openOn(state.map);
 }
 
@@ -442,12 +442,12 @@ async function removeMissed(id) {
 }
 window.removeMissed = removeMissed;
 
-// ---------- события ----------
+// ---------- events ----------
 
 $("upload").addEventListener("submit", async e => {
   e.preventDefault();
   const file = $("file").files[0];
-  if (!file) return toast("Выберите файл снимка");
+  if (!file) return toast("Choose an image file");
   const form = new FormData();
   form.append("file", file);
   $("upload-btn").disabled = true;
@@ -496,12 +496,12 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowDown") { e.preventDefault(); select(ids[Math.min(i + 1, ids.length - 1)], true); }
   else if (e.key === "ArrowUp") { e.preventDefault(); select(ids[Math.max(i - 1, 0)], true); }
   else if (state.selected == null) return;
-  // code не зависит от раскладки; key — запасной вариант (с/к — те же клавиши в русской раскладке)
+  // code is layout-independent; key is a fallback (с/к are the same physical keys in the Russian layout)
   else if (e.code === "KeyC" || "cCсС".includes(e.key)) review(state.selected, "confirmed");
   else if (e.code === "KeyR" || "rRкК".includes(e.key)) review(state.selected, "rejected");
 });
 
-// ---------- старт ----------
+// ---------- start ----------
 
 (async () => {
   makeMap(true);
@@ -512,8 +512,8 @@ document.addEventListener("keydown", e => {
       for (const [id, name] of Object.entries(m.classes)) if (!(name in state.classIds)) state.classIds[name] = +id;
     }
     const names = state.model.models.map(m => m.name).join(" + ");
-    $("model").textContent = `${names} · ${state.model.device} · ${Object.keys(state.classIds).length} классов`;
-  } catch (e) { $("model").textContent = "API недоступен"; toast(e.message); }
+    $("model").textContent = `${names} · ${state.model.device} · ${Object.keys(state.classIds).length} classes`;
+  } catch (e) { $("model").textContent = "API unavailable"; toast(e.message); }
   loadScenes();
 })();
 </script>

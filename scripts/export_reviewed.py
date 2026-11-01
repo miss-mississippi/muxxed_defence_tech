@@ -1,14 +1,14 @@
-"""Проверенные экспертом обнаружения → датасет YOLO-OBB для дообучения (цикл ТЗ п. 8).
+"""Operator-reviewed detections -> YOLO-OBB dataset for fine-tuning (the improvement loop).
 
     python scripts/export_reviewed.py --out data/reviewed_yolo
     python scripts/export_reviewed.py --scene-id 3 --scene-id 4 --val-frac 0.5
 
-Сцены из каталога режутся теми же тайлами, что при детекции. Тайл попадает в датасет,
-только если проверены ВСЕ пересекающие его обнаружения: подтверждённые → разметка,
-отклонённые → фон (hard negatives). Иначе непроверенный объект стал бы «фоном»
-и учил модель его не замечать.
-Ограничение: пропущенные моделью объекты так не разметить — для них нужен CVAT.
-Валидация — отдельными сценами (тайлы одной сцены перекрываются, иначе утечка).
+Catalogue scenes are cut into the same tiles as during detection. A tile enters the dataset only
+if ALL detections intersecting it have been reviewed: confirmed ones become labels, rejected ones
+become background (hard negatives). Otherwise an unreviewed object would become "background" and
+teach the model to ignore it.
+Limitation: objects the model missed cannot be labelled this way; they need a tool such as CVAT.
+Validation uses separate scenes (tiles of one scene overlap, so a random split would leak).
 """
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def export_reviewed(
                 tile_box = box(x0, y0, x0 + w, y0 + h)
                 inside = [(p, r) for p, r in polys if p.intersects(tile_box)]
                 if not inside:
-                    continue  # тайл без обнаружений никто не проверял — в нём могут быть пропуски
+                    continue  # nobody reviewed a tile without detections: it may contain misses
                 if any(r["review_status"] == "pending" for _, r in inside):
                     stats["skipped_pending"] += 1
                     continue
@@ -110,11 +110,11 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--db", type=Path, default=ROOT / "data" / "catalog.sqlite")
     p.add_argument("--out", type=Path, default=ROOT / "data" / "reviewed_yolo")
-    p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="откуда взять список классов")
-    p.add_argument("--scene-id", type=int, action="append", help="только эти сцены (можно несколько)")
+    p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="where to take the class list from")
+    p.add_argument("--scene-id", type=int, action="append", help="only these scenes (may be repeated)")
     p.add_argument("--tile", type=int, default=1024)
     p.add_argument("--overlap", type=int, default=200)
-    p.add_argument("--val-frac", type=float, default=0.2, help="доля сцен в val")
+    p.add_argument("--val-frac", type=float, default=0.2, help="share of scenes used for val")
     args = p.parse_args()
 
     from ultralytics import YOLO
@@ -124,7 +124,7 @@ def main() -> None:
     stats = export_reviewed(args.db, args.out, names, args.tile, args.overlap, args.scene_id, args.val_frac)
     print(json.dumps(stats, ensure_ascii=False, indent=2))
     if stats["skipped_pending"]:
-        print(f"! {stats['skipped_pending']} тайлов пропущено: в них есть непроверенные обнаружения")
+        print(f"! {stats['skipped_pending']} tiles skipped: they contain unreviewed detections")
     print(f"-> {args.out.resolve() / 'reviewed.yaml'}")
 
 

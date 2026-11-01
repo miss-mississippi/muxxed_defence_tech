@@ -1,14 +1,14 @@
-"""Полнота обнаружения по сцене.
+"""Per-scene detection recall.
 
-Точность известна из проверки: оператор подтверждает или отклоняет найденное. Полноту так
-не узнать — пропущенного объекта в списке нет. Поэтому оператор отмечает пропуски на карте
-отдельно, и полнота считается как доля найденного среди всего, что реально есть на снимке:
+Precision comes from review: the operator confirms or rejects what was found. Recall cannot be
+learned that way, because a missed object is not in the list. So the operator marks misses on the
+map separately, and recall is the share of what was found among everything actually in the image:
 
-    существует  = подтверждённые обнаружения + отмеченные пропуски
-    полнота(t)  = подтверждённые с уверенностью ≥ t / существует
+    exist      = confirmed detections + marked misses
+    recall(t)  = confirmed with confidence >= t / exist
 
-Пропуск — объект, которого нет в каталоге вовсе, то есть не найденный даже при пороге
-каталога 0.25. Поэтому один набор отметок даёт полноту сразу при нескольких порогах.
+A miss is an object absent from the catalogue altogether, i.e. not found even at the catalogue
+threshold of 0.25. That is why one set of marks gives recall at several thresholds at once.
 """
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ def scene_recall(detections: list[dict], missed: list[dict], complete: bool, thr
     pending = sum(1 for d in detections if d.get("review_status") == "pending")
     warnings = []
     if not complete:
-        warnings.append("пропуски размечены не полностью — цифры ниже только верхняя оценка полноты")
+        warnings.append("misses are not fully marked: the numbers below are only an upper bound on recall")
     if pending:
-        warnings.append(f"{pending} обнаружений не проверены — они не учтены ни как найденные, ни как существующие")
+        warnings.append(f"{pending} detections are not reviewed yet: they count neither as found nor as existing")
 
     def cls_of(d: dict) -> str:
         return d.get("review_class") or d["class_name"]

@@ -1,7 +1,7 @@
-"""Тесты сверки с реестром (detector/inventory.py).
+"""Tests for registry reconciliation (detector/inventory.py).
 
-Габариты взяты из реальных детекций демо-аэродрома, поэтому вердикты сверки
-габаритов здесь те же, что на карте.
+Dimensions come from real detections on the demo airfield, so the size-check verdicts
+here are the same as on the map.
 """
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from detector.inventory import (
 )
 
 AREA = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
-C17_OK = (53.0, 51.8)       # совпадает с паспортом
-C17_BORDER = (41.5, 39.0)   # 24.7% — на границе допуска
-C17_MISS = (28.2, 26.4)     # 49.0% — тип не подтверждён
-C5_MISS = (38.8, 35.6)      # 48.6% — тип не подтверждён
+C17_OK = (53.0, 51.8)       # matches the reference
+C17_BORDER = (41.5, 39.0)   # 24.7%: borderline
+C17_MISS = (28.2, 26.4)     # 49.0%: type not confirmed
+C5_MISS = (38.8, 35.6)      # 48.6%: type not confirmed
 E8 = (47.3, 41.4)           # 6.8%
-KC135 = (41.5, 39.9)        # паспорт
+KC135 = (41.5, 39.9)        # reference
 
 
 def plane(cls, size=(None, None), lon=0.5, lat=0.5, **extra):
@@ -30,7 +30,7 @@ def plane(cls, size=(None, None), lon=0.5, lat=0.5, **extra):
 
 
 def registry(**expected):
-    return parse_registry({"airfields": [{"id": "a", "name": "А", "area": AREA, "expected": expected}]})
+    return parse_registry({"airfields": [{"id": "a", "name": "A", "area": AREA, "expected": expected}]})
 
 
 def lines(report):
@@ -48,14 +48,14 @@ def test_statuses():
 
 
 def test_size_check_prevents_false_alarm():
-    # модель уверенно назвала C-5 то, что по габаритам C-5 быть не может
+    # the model confidently called something a C-5 that cannot be a C-5 by size
     feats = [plane("C-5", C5_MISS)]
     with_check = reconcile(feats, registry(**{"C-17": 1}))
     assert "C-5" not in lines(with_check)
     assert [u["class"] for u in with_check.airfields[0].unconfirmed] == ["C-5"]
 
     without_check = reconcile(feats, registry(**{"C-17": 1}), trust_size_check=False)
-    assert lines(without_check)["C-5"].status == NOT_IN_REGISTRY  # ложная тревога
+    assert lines(without_check)["C-5"].status == NOT_IN_REGISTRY  # false alarm
 
 
 def test_mismatch_not_counted_toward_its_type():
@@ -78,7 +78,7 @@ def test_untyped_plane_and_missing_note():
     report = reconcile([plane("plane")], registry(**{"C-130": 1}))
     assert len(report.airfields[0].untyped) == 1
     assert lines(report)["C-130"].status == MISSING
-    assert "могут быть не обнаруженные" in report.to_text()
+    assert "may include the ones not seen" in report.to_text()
 
 
 def test_aircraft_outside_airfields():
@@ -90,13 +90,13 @@ def test_airfield_outside_scene_is_not_reported_missing():
     report = reconcile([], registry(**{"C-17": 2}), scene_bounds=[10, 10, 11, 11])
     assert report.airfields[0].coverage == "none"
     assert report.airfields[0].lines == [] and report.airfields[0].missing == 0
-    assert "вне снимка" in report.to_text()
+    assert "outside the image" in report.to_text()
 
 
 def test_partial_coverage_warns():
     report = reconcile([], registry(**{"C-17": 1}), scene_bounds=[0.5, 0.5, 2, 2])
     assert report.airfields[0].coverage == "partial"
-    assert any("частично" in w for w in report.warnings)
+    assert any("partially" in w for w in report.warnings)
     full = reconcile([], registry(**{"C-17": 1}), scene_bounds=[-1, -1, 2, 2])
     assert full.airfields[0].coverage == "full" and not full.warnings
 
@@ -109,7 +109,7 @@ def test_resolution_warning():
 def test_missing_coordinates_warning():
     feat = plane("C-17", C17_OK, lon=None, lat=None)
     report = reconcile([feat], registry(**{"C-17": 1}))
-    assert any("без координат" in w for w in report.warnings)
+    assert any("without coordinates" in w for w in report.warnings)
 
 
 def test_operator_review_is_respected():
@@ -122,7 +122,7 @@ def test_operator_review_is_respected():
 
 
 def test_size_check_follows_corrected_class():
-    # модель сказала C-5, оператор исправил на C-17: для C-17 эти габариты правдоподобны
+    # the model said C-5, the operator corrected it to C-17: these dimensions are plausible for a C-17
     feat = plane("C-5", C17_OK, review_class="C-17")
     assert lines(reconcile([feat], registry(**{"C-17": 1})))["C-17"].status == MATCH
 

@@ -1,10 +1,10 @@
-"""Производительность детекции на большой сцене: тайлы/с, Мпикс/с, км²/ч.
+"""Detection throughput on a large scene: tiles/s, megapixels/s, km²/h.
 
-    python scripts/benchmark.py                               # синтетическая сцена 8192×8192, GSD 0.5 м
-    python scripts/benchmark.py --scene path/to/scene.tif     # реальная сцена (GSD берётся из геопривязки)
+    python scripts/benchmark.py                               # synthetic 8192x8192 scene, GSD 0.5 m
+    python scripts/benchmark.py --scene path/to/scene.tif     # real scene (GSD taken from georeferencing)
 
-Синтетическая сцена — мозаика из samples/boats.jpg: число объектов не показательно, скорость — да.
-Отчёт: outputs/benchmark/<сцена>_<устройство>.json
+The synthetic scene is a mosaic of samples/boats.jpg: the object count is meaningless, the speed is not.
+Report: outputs/benchmark/<scene>_<device>.json
 """
 from __future__ import annotations
 
@@ -38,9 +38,9 @@ def synthetic_scene(path: Path, size: int, gsd: float) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--scene", type=Path, default=None, help="сцена; по умолчанию синтетическая")
-    p.add_argument("--size", type=int, default=8192, help="сторона синтетической сцены, px")
-    p.add_argument("--gsd", type=float, default=0.5, help="м/px синтетической сцены")
+    p.add_argument("--scene", type=Path, default=None, help="scene; synthetic by default")
+    p.add_argument("--size", type=int, default=8192, help="side of the synthetic scene, px")
+    p.add_argument("--gsd", type=float, default=0.5, help="m/px of the synthetic scene")
     p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     p.add_argument("--device", default=None)
     p.add_argument("--tile", type=int, default=1024)
@@ -49,7 +49,7 @@ def main() -> None:
     args = p.parse_args()
 
     detector = Detector(args.weights, device=args.device)
-    detector.predict(np.zeros((args.tile, args.tile, 3), np.uint8))  # прогрев
+    detector.predict(np.zeros((args.tile, args.tile, 3), np.uint8))  # warm-up
 
     with tempfile.TemporaryDirectory() as tmp:
         scene = args.scene

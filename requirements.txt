@@ -1,9 +1,9 @@
 # ML
 ultralytics==8.4.152
 torch==2.14.0
-# аугментации при обучении (гауссов шум); без неё обучение работает, но без шума
+# training augmentations (Gaussian noise); training works without it, just without noise
 albumentations
-# геоданные
+# geospatial
 rasterio==1.4.4
 pyproj==3.7.1
 shapely==2.1.2
@@ -11,6 +11,6 @@ shapely==2.1.2
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
 python-multipart
-# тесты
+# tests
 pytest==9.1.1
 httpx==0.28.1

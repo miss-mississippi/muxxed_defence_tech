@@ -1,10 +1,10 @@
-"""REST API: загрузка снимков, каталог обнаружений, визуальная проверка оператором, отчёт, карта.
+"""REST API: image upload, detection catalogue, operator review, report, map.
 
     .venv/bin/uvicorn api.app:app --host 0.0.0.0 --port 8000
-    # карта: http://127.0.0.1:8000   документация API: http://127.0.0.1:8000/docs
+    # map: http://127.0.0.1:8000   API docs: http://127.0.0.1:8000/docs
 
-Переменные окружения: DATA_DIR (каталог данных, по умолчанию ./data),
-WEIGHTS (путь к весам), DEVICE (cpu | mps | 0), CONF (порог уверенности).
+Environment variables: DATA_DIR (data directory, ./data by default), WEIGHTS (path to weights),
+DEVICE (cpu | mps | 0), CONF (confidence threshold), MODELS (several models, see detector/registry.py).
 """
 from __future__ import annotations
 
@@ -40,15 +40,15 @@ ReviewStatus = Literal["pending", "confirmed", "rejected"]
 
 class Review(BaseModel):
     status: ReviewStatus
-    class_name: str | None = None  # исправленный экспертом класс
+    class_name: str | None = None  # class corrected by the operator
     comment: str | None = None
 
 
 class Missed(BaseModel):
     class_name: str
-    lon: float | None = None  # для снимков с геопривязкой
+    lon: float | None = None  # for georeferenced images
     lat: float | None = None
-    cx: float | None = None   # пиксели, для снимков без геопривязки
+    cx: float | None = None   # pixels, for images without georeferencing
     cy: float | None = None
     comment: str | None = None
 
@@ -68,10 +68,10 @@ def create_app(
     weights = Path(weights or os.environ.get("WEIGHTS", DEFAULT_WEIGHTS))
     device = device or os.environ.get("DEVICE") or None
     conf = conf if conf is not None else float(os.environ.get("CONF", 0.25))
-    # MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt" — порядок задаёт приоритет
+    # MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt": order sets priority
     models = models if models is not None else os.environ.get("MODELS")
     scenes_dir, previews_dir, db_path = data_dir / "scenes", data_dir / "previews", data_dir / "catalog.sqlite"
-    detect_lock = threading.Lock()  # одна модель на процесс — сцены обрабатываются по очереди
+    detect_lock = threading.Lock()  # one model per process: scenes are processed one at a time
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -86,8 +86,8 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="Идентификация объектов на космических снимках",
-        description="YOLO11-OBB: детекция, каталог обнаружений, визуальная проверка оператором. NU STeP x Defense Tech Challenge.",
+        title="Object identification in satellite imagery",
+        description="YOLO11-OBB: detection, detection catalogue, operator review. NU STeP x Defense Tech Challenge.",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -98,13 +98,13 @@ def create_app(
     def get_scene_row(conn, scene_id: int):
         row = conn.execute("SELECT * FROM scenes WHERE id = ?", (scene_id,)).fetchone()
         if row is None:
-            raise HTTPException(404, f"сцена {scene_id} не найдена")
+            raise HTTPException(404, f"scene {scene_id} not found")
         return row
 
     def save_upload(file: UploadFile, directory: Path) -> Path:
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in ALLOWED_SUFFIXES:
-            raise HTTPException(415, f"поддерживаются {sorted(ALLOWED_SUFFIXES)}")
+            raise HTTPException(415, f"supported formats: {sorted(ALLOWED_SUFFIXES)}")
         path = directory / f"{uuid.uuid4().hex}{suffix}"
         with path.open("wb") as out:
             while chunk := file.file.read(1 << 20):
@@ -154,13 +154,13 @@ def create_app(
                         " + ".join(registry().detectors), json.dumps(result.warnings, ensure_ascii=False), scene_id,
                     ),
                 )
-        except Exception as exc:  # сцена помечается failed, сервер продолжает работать
+        except Exception as exc:  # the scene is marked failed, the server keeps running
             with db.session(db_path) as conn:
                 conn.execute("UPDATE scenes SET status = 'failed', error = ? WHERE id = ?", (repr(exc), scene_id))
 
-    # ---------- служебное ----------
+    # ---------- service ----------
 
-    @app.get("/api/health", tags=["служебное"])
+    @app.get("/api/health", tags=["service"])
     def health() -> dict:
         r = registry()
         return {
@@ -170,7 +170,7 @@ def create_app(
             "classes": len(r.all_class_names()),
         }
 
-    @app.get("/api/model", tags=["служебное"])
+    @app.get("/api/model", tags=["service"])
     def model_info() -> dict:
         r = registry()
         return {
@@ -189,11 +189,11 @@ def create_app(
             ],
         }
 
-    # ---------- сцены ----------
+    # ---------- scenes ----------
 
-    @app.post("/api/scenes", status_code=202, tags=["сцены"])
+    @app.post("/api/scenes", status_code=202, tags=["scenes"])
     def upload_scene(background: BackgroundTasks, file: UploadFile = File(...)) -> dict:
-        """Загрузить снимок (GeoTIFF/JPG/PNG). Обработка идёт в фоне — статус в GET /api/scenes/{id}."""
+        """Upload an image (GeoTIFF/JPG/PNG). Processing runs in the background; poll GET /api/scenes/{id} for status."""
         path = save_upload(file, scenes_dir)
         with db.session(db_path) as conn:
             cur = conn.execute("INSERT INTO scenes (filename, path) VALUES (?, ?)", (file.filename, str(path)))
@@ -202,7 +202,7 @@ def create_app(
         background.add_task(process_scene, scene_id, path)
         return db.scene_dict(row)
 
-    @app.get("/api/scenes", tags=["сцены"])
+    @app.get("/api/scenes", tags=["scenes"])
     def list_scenes() -> list[dict]:
         with db.session(db_path) as conn:
             rows = conn.execute("SELECT * FROM scenes ORDER BY id DESC").fetchall()
@@ -214,7 +214,7 @@ def create_app(
             by_scene.setdefault(c["scene_id"], {})[c["review_status"]] = c["n"]
         return [db.scene_dict(r) | {"review": by_scene.get(r["id"], {})} for r in rows]
 
-    @app.get("/api/scenes/{scene_id}", tags=["сцены"])
+    @app.get("/api/scenes/{scene_id}", tags=["scenes"])
     def get_scene(scene_id: int) -> dict:
         with db.session(db_path) as conn:
             row = get_scene_row(conn, scene_id)
@@ -232,9 +232,9 @@ def create_app(
             "review": {r["review_status"]: r["n"] for r in review},
         }
 
-    @app.delete("/api/scenes/{scene_id}", status_code=204, tags=["сцены"])
+    @app.delete("/api/scenes/{scene_id}", status_code=204, tags=["scenes"])
     def delete_scene(scene_id: int) -> Response:
-        """Удалить сцену вместе с её обнаружениями, файлом снимка и превью."""
+        """Delete a scene together with its detections, image file and preview."""
         with db.session(db_path) as conn:
             row = get_scene_row(conn, scene_id)
             scene_path = Path(row["path"])
@@ -245,16 +245,16 @@ def create_app(
         (previews_dir / f"{scene_id}.png").unlink(missing_ok=True)
         return Response(status_code=204)
 
-    @app.get("/api/scenes/{scene_id}/preview.png", tags=["сцены"])
+    @app.get("/api/scenes/{scene_id}/preview.png", tags=["scenes"])
     def scene_preview(scene_id: int) -> FileResponse:
         path = previews_dir / f"{scene_id}.png"
         if not path.exists():
-            raise HTTPException(404, "превью ещё не готово")
+            raise HTTPException(404, "preview is not ready yet")
         return FileResponse(path, media_type="image/png")
 
-    @app.get("/api/scenes/{scene_id}/report", response_class=HTMLResponse, tags=["сцены"])
+    @app.get("/api/scenes/{scene_id}/report", response_class=HTMLResponse, tags=["scenes"])
     def scene_report(scene_id: int, min_conf: float = Query(0.4, ge=0, le=1)) -> str:
-        """Отчёт по сцене (HTML, печатается в PDF из браузера). По умолчанию уверенность ≥ 0.4, как на карте."""
+        """Scene report (HTML, printable to PDF from the browser). Confidence >= 0.4 by default, as on the map."""
         scene = get_scene(scene_id)
         with db.session(db_path) as conn:
             rows = conn.execute(
@@ -264,21 +264,21 @@ def create_app(
             ).fetchall()
         return render_report(scene, rows, min_conf, scene_recall_for(scene_id))
 
-    # ---------- обнаружения ----------
+    # ---------- detections ----------
 
-    @app.get("/api/detections", tags=["обнаружения"])
+    @app.get("/api/detections", tags=["detections"])
     def list_detections(
         scene_id: int | None = None,
-        class_name: list[str] | None = Query(None, description="можно несколько"),
-        model: list[str] | None = Query(None, description="имена моделей"),
+        class_name: list[str] | None = Query(None, description="may be repeated"),
+        model: list[str] | None = Query(None, description="model names"),
         min_conf: float = Query(0.0, ge=0, le=1),
         status: list[ReviewStatus] | None = Query(None),
-        size_check: list[str] | None = Query(None, description="ok | borderline | mismatch | unknown — сверка габаритов с паспортными"),
+        size_check: list[str] | None = Query(None, description="ok | borderline | mismatch | unknown: measured size vs reference size"),
         bbox: str | None = Query(None, description="west,south,east,north (WGS84)"),
         limit: int = Query(5000, ge=1, le=50000),
         offset: int = Query(0, ge=0),
     ) -> dict:
-        """Каталог обнаружений в виде GeoJSON FeatureCollection с фильтрами."""
+        """Detection catalogue as a GeoJSON FeatureCollection, with filters."""
         where, params = ["confidence >= ?"], [min_conf]
         if scene_id is not None:
             where.append("scene_id = ?")
@@ -307,19 +307,19 @@ def create_app(
             rows = conn.execute(sql, [*params, limit, offset]).fetchall()
         return {"type": "FeatureCollection", "features": [db.detection_feature(r) for r in rows]}
 
-    @app.get("/api/detections/{detection_id}", tags=["обнаружения"])
+    @app.get("/api/detections/{detection_id}", tags=["detections"])
     def get_detection(detection_id: int) -> dict:
         with db.session(db_path) as conn:
             row = conn.execute("SELECT * FROM detections WHERE id = ?", (detection_id,)).fetchone()
         if row is None:
-            raise HTTPException(404, f"обнаружение {detection_id} не найдено")
+            raise HTTPException(404, f"detection {detection_id} not found")
         return db.detection_feature(row)
 
-    @app.patch("/api/detections/{detection_id}", tags=["обнаружения"])
+    @app.patch("/api/detections/{detection_id}", tags=["detections"])
     def review_detection(detection_id: int, review: Review) -> dict:
-        """Визуальная проверка оператором: подтвердить / отклонить / исправить класс."""
+        """Operator review: confirm / reject / correct the class."""
         if review.class_name is not None and review.class_name not in registry().all_class_names():
-            raise HTTPException(422, f"неизвестный класс {review.class_name}")
+            raise HTTPException(422, f"unknown class {review.class_name}")
         reviewed_at = None if review.status == "pending" else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with db.session(db_path) as conn:
             cur = conn.execute(
@@ -327,10 +327,10 @@ def create_app(
                 (review.status, review.class_name, review.comment, reviewed_at, detection_id),
             )
             if cur.rowcount == 0:
-                raise HTTPException(404, f"обнаружение {detection_id} не найдено")
+                raise HTTPException(404, f"detection {detection_id} not found")
         return get_detection(detection_id)
 
-    @app.get("/api/stats", tags=["обнаружения"])
+    @app.get("/api/stats", tags=["detections"])
     def stats() -> dict:
         with db.session(db_path) as conn:
             by_class = conn.execute(
@@ -345,7 +345,7 @@ def create_app(
             "by_status": {r["review_status"]: r["n"] for r in by_status},
         }
 
-    # ---------- полнота: пропущенные моделью объекты ----------
+    # ---------- recall: objects the model missed ----------
 
     def detection_at(conn, scene_id: int, geo: bool, item: Missed) -> int | None:
         rows = conn.execute(
@@ -370,29 +370,29 @@ def create_app(
         return scene_recall([dict(d) for d in dets], [dict(m) for m in missed],
                             complete=scene["completeness_at"] is not None)
 
-    @app.post("/api/scenes/{scene_id}/missed", status_code=201, tags=["полнота"])
+    @app.post("/api/scenes/{scene_id}/missed", status_code=201, tags=["recall"])
     def add_missed(scene_id: int, item: Missed) -> dict:
-        """Отметить объект, который модель пропустила. Отметки нужны только для оценки полноты."""
+        """Mark an object the model missed. Marks are used only to measure recall."""
         scene = get_scene(scene_id)
         if item.class_name not in registry().all_class_names():
-            raise HTTPException(422, f"неизвестный класс {item.class_name}")
+            raise HTTPException(422, f"unknown class {item.class_name}")
         geo = bool(scene["georeferenced"])
         if geo and (item.lon is None or item.lat is None):
-            raise HTTPException(422, "для снимка с геопривязкой нужны lon и lat")
+            raise HTTPException(422, "lon and lat are required for a georeferenced image")
         if not geo and (item.cx is None or item.cy is None):
-            raise HTTPException(422, "для снимка без геопривязки нужны cx и cy")
+            raise HTTPException(422, "cx and cy are required for an image without georeferencing")
         if geo:
             west, south, east, north = scene["bounds_wgs84"]
             inside = west <= item.lon <= east and south <= item.lat <= north
         else:
             inside = 0 <= item.cx <= scene["width"] and 0 <= item.cy <= scene["height"]
         if not inside:
-            raise HTTPException(422, "точка вне снимка")
+            raise HTTPException(422, "the point is outside the image")
         with db.session(db_path) as conn:
             hit = detection_at(conn, scene_id, geo, item)
             if hit is not None:
-                raise HTTPException(409, f"здесь уже есть обнаружение #{hit}: его нужно подтвердить "
-                                         f"или исправить класс, а не отмечать как пропуск")
+                raise HTTPException(409, f"detection #{hit} is already here: confirm it or correct "
+                                         f"its class instead of marking a miss")
             cur = conn.execute(
                 "INSERT INTO missed (scene_id, class_name, center_lon, center_lat, cx, cy, comment) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -402,45 +402,45 @@ def create_app(
             row = conn.execute("SELECT * FROM missed WHERE id = ?", (cur.lastrowid,)).fetchone()
         return db.missed_feature(row)
 
-    @app.get("/api/scenes/{scene_id}/missed", tags=["полнота"])
+    @app.get("/api/scenes/{scene_id}/missed", tags=["recall"])
     def list_missed(scene_id: int) -> dict:
         get_scene(scene_id)
         with db.session(db_path) as conn:
             rows = conn.execute("SELECT * FROM missed WHERE scene_id = ? ORDER BY id", (scene_id,)).fetchall()
         return {"type": "FeatureCollection", "features": [db.missed_feature(r) for r in rows]}
 
-    @app.delete("/api/missed/{missed_id}", status_code=204, tags=["полнота"])
+    @app.delete("/api/missed/{missed_id}", status_code=204, tags=["recall"])
     def delete_missed(missed_id: int) -> Response:
         with db.session(db_path) as conn:
             if conn.execute("DELETE FROM missed WHERE id = ?", (missed_id,)).rowcount == 0:
-                raise HTTPException(404, f"отметка {missed_id} не найдена")
+                raise HTTPException(404, f"mark {missed_id} not found")
         return Response(status_code=204)
 
-    @app.put("/api/scenes/{scene_id}/completeness", tags=["полнота"])
+    @app.put("/api/scenes/{scene_id}/completeness", tags=["recall"])
     def set_completeness(scene_id: int, body: Completeness) -> dict:
-        """Оператор подтверждает, что просмотрел всю сцену и отметил все пропуски."""
+        """The operator confirms that the whole scene was inspected and every miss was marked."""
         get_scene(scene_id)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if body.complete else None
         with db.session(db_path) as conn:
             conn.execute("UPDATE scenes SET completeness_at = ? WHERE id = ?", (stamp, scene_id))
         return scene_recall_for(scene_id)
 
-    @app.get("/api/scenes/{scene_id}/recall", tags=["полнота"])
+    @app.get("/api/scenes/{scene_id}/recall", tags=["recall"])
     def recall(scene_id: int) -> dict:
-        """Полнота по сцене: общая и по классам, при порогах 0.25 и 0.4."""
+        """Scene recall, overall and per class, at thresholds 0.25 and 0.4."""
         get_scene(scene_id)
         return scene_recall_for(scene_id)
 
-    # ---------- сверка с реестром техники ----------
+    # ---------- reconciliation with the equipment registry ----------
 
-    @app.post("/api/scenes/{scene_id}/inventory", tags=["реестр"])
+    @app.post("/api/scenes/{scene_id}/inventory", tags=["registry"])
     def scene_inventory(
         scene_id: int,
-        doc: dict = Body(..., description="реестр: {airfields: [{id, name, area: GeoJSON, expected: {тип: число}}]}"),
-        use_review: bool = Query(True, description="учитывать решения оператора"),
-        use_size_check: bool = Query(True, description="не засчитывать типы, которым противоречат габариты"),
+        doc: dict = Body(..., description="registry: {airfields: [{id, name, area: GeoJSON, expected: {type: count}}]}"),
+        use_review: bool = Query(True, description="respect operator decisions"),
+        use_size_check: bool = Query(True, description="do not count types contradicted by the measured size"),
     ) -> dict:
-        """Сверка самолётов сцены с реестром. Реестр приходит в запросе и нигде не сохраняется."""
+        """Reconcile the scene's aircraft with a registry. The registry comes in the request and is never stored."""
         scene = get_scene(scene_id)
         try:
             airfields = parse_registry(doc)
@@ -455,11 +455,11 @@ def create_app(
                            known_types=known, use_review=use_review, trust_size_check=use_size_check)
         return report.to_dict()
 
-    # ---------- синхронная детекция для интеграции ----------
+    # ---------- synchronous detection for integration ----------
 
-    @app.post("/api/detect", tags=["интеграция"])
+    @app.post("/api/detect", tags=["integration"])
     def detect_sync(file: UploadFile = File(...)) -> dict:
-        """Снимок → GeoJSON сразу в ответе, без сохранения в каталог (для внешних систем)."""
+        """Image -> GeoJSON directly in the response, without saving to the catalogue (for external systems)."""
         with tempfile.TemporaryDirectory() as tmp:
             path = save_upload(file, Path(tmp))
             with detect_lock:
@@ -468,14 +468,14 @@ def create_app(
         geojson["scene"]["path"] = file.filename
         return geojson
 
-    # ---------- карта ----------
+    # ---------- map ----------
 
     if WEB_DIR.exists():
         app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
         @app.get("/", include_in_schema=False)
         def index() -> FileResponse:
-            # no-cache: после обновления кода браузер не покажет старую страницу
+            # no-cache: after a code update the browser will not show a stale page
             return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
@@ -483,9 +483,9 @@ def create_app(
 
 def render_report(scene: dict, rows: list, min_conf: float = 0.0, recall: dict | None = None) -> str:
     e = html.escape
-    status_ru = {"pending": "не проверено", "confirmed": "подтверждено", "rejected": "отклонено"}
-    size_ru = {"ok": "габариты сходятся", "borderline": "на границе допуска",
-               "mismatch": "тип не подтверждён", "unknown": "—"}
+    status_text = {"pending": "not reviewed", "confirmed": "confirmed", "rejected": "rejected"}
+    size_text = {"ok": "size matches", "borderline": "borderline",
+                 "mismatch": "type not confirmed", "unknown": "—"}
     by_class: dict[str, int] = {}
     for r in rows:
         name = r["review_class"] or r["class_name"]
@@ -493,7 +493,7 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0, recall: dict |
     counts = "".join(
         f"<tr><td>{e(k)}</td><td>{v}</td></tr>" for k, v in sorted(by_class.items(), key=lambda kv: -kv[1])
     )
-    review = ", ".join(f"{status_ru.get(k, k)}: {v}" for k, v in scene["review"].items()) or "—"
+    review = ", ".join(f"{status_text.get(k, k)}: {v}" for k, v in scene["review"].items()) or "—"
 
     def row_html(r) -> str:
         center = "" if r["center_lat"] is None else f"{r['center_lat']:.6f}, {r['center_lon']:.6f}"
@@ -501,45 +501,45 @@ def render_report(scene: dict, rows: list, min_conf: float = 0.0, recall: dict |
         azimuth = "" if r["orientation_deg"] is None else f"{r['orientation_deg']:.0f}°"
         verdict = (r["size_check"] if "size_check" in r.keys() else None) or "unknown"
         deviation = r["size_deviation"] if "size_deviation" in r.keys() else None
-        geom = size_ru.get(verdict, "—")
+        geom = size_text.get(verdict, "—")
         if verdict in ("mismatch", "borderline") and deviation is not None:
             geom += f" ({deviation:.1%})"
         return (
             f"<tr><td>{r['id']}</td><td>{e(r['review_class'] or r['class_name'])}</td>"
             f"<td>{e(r['model'] or '')}</td><td>{r['confidence']:.2f}</td>"
             f"<td>{center}</td><td>{size}</td><td>{geom}</td><td>{azimuth}</td>"
-            f"<td>{status_ru[r['review_status']]}</td></tr>"
+            f"<td>{status_text[r['review_status']]}</td></tr>"
         )
 
     table = "".join(row_html(r) for r in rows)
     recall_html = render_recall(recall)
     bounds = scene["bounds_wgs84"]
-    return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<title>Отчёт — {e(scene['filename'])}</title>
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Report: {e(scene['filename'])}</title>
 <style>
 :root{{color-scheme:light}} body{{font:14px/1.45 system-ui,sans-serif;margin:32px;color:#111;background:#fff}} h1{{font-size:20px;margin:0 0 4px}}
 table{{border-collapse:collapse;margin:12px 0 24px}} td,th{{border:1px solid #ccc;padding:4px 8px;text-align:left}}
 th{{background:#f2f2f2}} .muted{{color:#666}} img{{max-width:100%;border:1px solid #ccc}}
 </style></head><body>
-<h1>Отчёт об автоматизированной идентификации объектов</h1>
-<div class="muted">Сформирован {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC · результаты информационно-аналитические, подлежат экспертной проверке</div>
-<h2>Снимок</h2>
+<h1>Automated object identification report</h1>
+<div class="muted">Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC · results are for analytical support and are subject to expert verification</div>
+<h2>Image</h2>
 <table>
-<tr><th>Файл</th><td>{e(scene['filename'])}</td></tr>
-<tr><th>Размер, px</th><td>{scene['width']} × {scene['height']}</td></tr>
-<tr><th>Система координат</th><td>{e(scene['crs'] or 'нет геопривязки')}</td></tr>
-<tr><th>Разрешение, м/px</th><td>{scene['gsd_m'] or '—'}</td></tr>
-<tr><th>Границы (WGS84)</th><td>{'—' if not bounds else f'З {bounds[0]:.5f}, Ю {bounds[1]:.5f}, В {bounds[2]:.5f}, С {bounds[3]:.5f}'}</td></tr>
-<tr><th>Модель</th><td>{e(scene['model'] or '')}</td></tr>
-<tr><th>Время обработки, с</th><td>{scene['elapsed_s']}</td></tr>
-<tr><th>Визуальная проверка оператором</th><td>{review}</td></tr>
+<tr><th>File</th><td>{e(scene['filename'])}</td></tr>
+<tr><th>Size, px</th><td>{scene['width']} × {scene['height']}</td></tr>
+<tr><th>Coordinate system</th><td>{e(scene['crs'] or 'not georeferenced')}</td></tr>
+<tr><th>Resolution, m/px</th><td>{scene['gsd_m'] or '—'}</td></tr>
+<tr><th>Bounds (WGS84)</th><td>{'—' if not bounds else f'W {bounds[0]:.5f}, S {bounds[1]:.5f}, E {bounds[2]:.5f}, N {bounds[3]:.5f}'}</td></tr>
+<tr><th>Model</th><td>{e(scene['model'] or '')}</td></tr>
+<tr><th>Processing time, s</th><td>{scene['elapsed_s']}</td></tr>
+<tr><th>Operator review</th><td>{review}</td></tr>
 </table>
-<h2>Объекты по классам (уверенность ≥ {min_conf:.2f}, без отклонённых)</h2>
-<table><tr><th>Класс</th><th>Количество</th></tr>{counts}</table>
+<h2>Objects by class (confidence ≥ {min_conf:.2f}, excluding rejected)</h2>
+<table><tr><th>Class</th><th>Count</th></tr>{counts}</table>
 {recall_html}
-<img src="/api/scenes/{scene['id']}/preview.png" alt="превью сцены">
-<h2>Перечень обнаружений</h2>
-<table><tr><th>ID</th><th>Класс</th><th>Модель</th><th>Уверенность</th><th>Центр (шир., долг.)</th><th>Размер, м</th><th>Геометрия</th><th>Азимут</th><th>Статус</th></tr>{table}</table>
+<img src="/api/scenes/{scene['id']}/preview.png" alt="scene preview">
+<h2>Detections</h2>
+<table><tr><th>ID</th><th>Class</th><th>Model</th><th>Confidence</th><th>Centre (lat, lon)</th><th>Size, m</th><th>Size check</th><th>Azimuth</th><th>Status</th></tr>{table}</table>
 </body></html>"""
 
 
@@ -551,8 +551,8 @@ def render_recall(recall: dict | None) -> str:
     if not recall:
         return ""
     if not recall["complete"]:
-        return ('<h2>Полнота</h2><div class="muted">Не определена: оператор не отметил, что все пропущенные '
-                'моделью объекты размечены. Без этого известна только точность.</div>')
+        return ('<h2>Recall</h2><div class="muted">Not determined: the operator has not confirmed that every '
+                'object missed by the model is marked. Until then only precision is known.</div>')
     keys = list(recall["total"]["recall"])
 
     def cell(value) -> str:
@@ -562,11 +562,11 @@ def render_recall(recall: dict | None) -> str:
         values = "".join(cell(block["recall"][k]) for k in keys)
         return f"<tr><{tag}>{e(name)}</{tag}><td>{block['exist']}</td><td>{block['missed']}</td>{values}</tr>"
 
-    heads = "".join(f"<th>Полнота, уверенность ≥ {k}</th>" for k in keys)
-    body = "".join(line(c, b) for c, b in recall["by_class"].items()) + line("Всего", recall["total"], "th")
+    heads = "".join(f"<th>Recall, confidence ≥ {k}</th>" for k in keys)
+    body = "".join(line(c, b) for c, b in recall["by_class"].items()) + line("Total", recall["total"], "th")
     return (
-        "<h2>Полнота</h2>"
-        '<div class="muted">Оператор просмотрел всю сцену и отметил пропущенные объекты. '
-        "Существует = подтверждённые обнаружения + отмеченные пропуски.</div>"
-        f"<table><tr><th>Класс</th><th>Существует</th><th>Пропущено</th>{heads}</tr>{body}</table>"
+        "<h2>Recall</h2>"
+        '<div class="muted">The operator inspected the whole scene and marked missed objects. '
+        "Exist = confirmed detections + marked misses.</div>"
+        f"<table><tr><th>Class</th><th>Exist</th><th>Missed</th>{heads}</tr>{body}</table>"
     )

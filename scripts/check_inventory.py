@@ -1,11 +1,11 @@
-"""Сверка самолётов на снимке с реестром техники.
+"""Reconcile the aircraft in an image with an equipment registry.
 
     python scripts/check_inventory.py data/demo/durban_airport.tif --registry samples/registry_demo.json
-    python scripts/check_inventory.py scene.tif --registry reg.json --no-size-check   # для сравнения
+    python scripts/check_inventory.py scene.tif --registry reg.json --no-size-check   # for comparison
     python scripts/check_inventory.py scene.tif --registry reg.json --json
 
-Снимок обрабатывается обеими моделями, затем самолёты сверяются с реестром.
-Реестр читается из файла и никуда не сохраняется.
+The image is processed by both models, then the aircraft are reconciled with the registry.
+The registry is read from a file and is not stored anywhere.
 """
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ def main() -> None:
     p.add_argument("--registry", type=Path, required=True)
     p.add_argument("--models", default=os.environ.get("MODELS", DEFAULT_MODELS))
     p.add_argument("--conf", type=float, default=0.25)
-    p.add_argument("--no-size-check", action="store_true", help="не учитывать сверку габаритов (для сравнения)")
-    p.add_argument("--json", action="store_true", help="результат в JSON")
+    p.add_argument("--no-size-check", action="store_true", help="ignore the size check (for comparison)")
+    p.add_argument("--json", action="store_true", help="print the result as JSON")
     args = p.parse_args()
 
     airfields = load_registry(args.registry)

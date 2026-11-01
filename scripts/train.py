@@ -1,9 +1,9 @@
-"""Дообучение YOLO-OBB с весов DOTA (трансферное обучение) и оценка лучшей эпохи.
+"""Fine-tune YOLO-OBB from the DOTA weights (transfer learning) and evaluate the best epoch.
 
     python scripts/train.py --data data/mar20_yolo/mar20.yaml --name mar20_s_800 --epochs 60 --imgsz 800 --batch 16
     python scripts/train.py --data dota8.yaml --name smoke --epochs 1 --imgsz 640 --batch 4 --device cpu
 
-Лучшие веса копируются в weights/<name>.pt, метрики — в outputs/eval/ (test, если он есть в yaml, иначе val).
+The best weights are copied to weights/<name>.pt, metrics go to outputs/eval/ (test if the yaml has it, else val).
 """
 from __future__ import annotations
 
@@ -25,15 +25,15 @@ from scripts.eval import evaluate, to_markdown  # noqa: E402
 
 
 def noise_augmentations(probability: float) -> list | None:
-    """Стандартный набор аугментаций ultralytics плюс гауссов шум.
+    """The standard ultralytics augmentation set plus Gaussian noise.
 
-    Шума в штатном наборе нет, из-за этого модель проседала на зашумлённых снимках:
-    mAP50 0.900 → 0.371 при σ=15.
+    The default set has no noise, which is why the model collapsed on noisy images:
+    mAP50 0.900 -> 0.371 at sigma=15.
     """
     try:
         import albumentations as A
-    except ImportError:  # необязательная зависимость: без неё обучение идёт, просто без шума
-        LOGGER.warning("albumentations не установлена, обучение пойдёт без шумовой аугментации")
+    except ImportError:  # optional dependency: training still runs, just without noise
+        LOGGER.warning("albumentations is not installed, training will run without noise augmentation")
         return None
     return [
         A.Blur(p=0.01),
@@ -46,22 +46,22 @@ def noise_augmentations(probability: float) -> list | None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--data", required=True, help="yaml датасета YOLO-OBB")
-    p.add_argument("--name", required=True, help="имя прогона → runs/obb/<name>, weights/<name>.pt")
-    p.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="стартовые веса (по умолчанию DOTA yolo11s-obb)")
+    p.add_argument("--data", required=True, help="YOLO-OBB dataset yaml")
+    p.add_argument("--name", required=True, help="run name -> runs/obb/<name>, weights/<name>.pt")
+    p.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="starting weights (DOTA yolo11s-obb by default)")
     p.add_argument("--epochs", type=int, default=60)
     p.add_argument("--imgsz", type=int, default=1024)
     p.add_argument("--batch", type=int, default=8)
-    p.add_argument("--device", default=None, help="cpu | mps | 0 | 0,1 (по умолчанию — автовыбор)")
+    p.add_argument("--device", default=None, help="cpu | mps | 0 | 0,1 (auto-selected by default)")
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--patience", type=int, default=15, help="ранняя остановка без улучшения val")
-    p.add_argument("--degrees", type=float, default=0.0, help="аугментация поворотом ±градусы")
-    p.add_argument("--freeze", type=int, default=0, help="заморозить первые N слоёв")
-    p.add_argument("--fraction", type=float, default=1.0, help="доля train для быстрых прогонов")
+    p.add_argument("--patience", type=int, default=15, help="early stopping patience without val improvement")
+    p.add_argument("--degrees", type=float, default=0.0, help="rotation augmentation, +/- degrees")
+    p.add_argument("--freeze", type=int, default=0, help="freeze the first N layers")
+    p.add_argument("--fraction", type=float, default=1.0, help="fraction of train used, for quick runs")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--noise", type=float, default=0.0, help="вероятность гауссова шума в аугментациях")
+    p.add_argument("--noise", type=float, default=0.0, help="probability of Gaussian noise in augmentations")
     p.add_argument("--robustness", type=int, default=400,
-                   help="после обучения замерить устойчивость на N снимках (0 — не мерить)")
+                   help="after training, measure robustness on N images (0 to skip)")
     args = p.parse_args()
 
     device = args.device or pick_device()
@@ -70,7 +70,7 @@ def main() -> None:
         augmentations = noise_augmentations(args.noise)
         if augmentations:
             extra["augmentations"] = augmentations
-            LOGGER.info(f"аугментации: GaussNoise(p={args.noise}) добавлен к стандартному набору")
+            LOGGER.info(f"augmentations: GaussNoise(p={args.noise}) added to the standard set")
     model = YOLO(args.weights, task="obb")
     model.train(
         data=args.data,
@@ -89,7 +89,7 @@ def main() -> None:
         freeze=args.freeze or None,
         cos_lr=True,
         close_mosaic=min(10, args.epochs),
-        # у снимка сверху нет «верха»: вертикальный флип и поворот не искажают сцену
+        # an overhead image has no "up": vertical flips and rotation do not distort the scene
         flipud=0.5,
         fliplr=0.5,
         degrees=args.degrees,
@@ -101,23 +101,23 @@ def main() -> None:
     target = ROOT / "weights" / f"{args.name}.pt"
     target.parent.mkdir(exist_ok=True)
     shutil.copy2(best, target)
-    print(f"лучшие веса: {best} -> {target}")
+    print(f"best weights: {best} -> {target}")
 
     split = "test" if check_det_dataset(args.data).get("test") else "val"
     report = evaluate(target, args.data, split=split, imgsz=args.imgsz, batch=args.batch, device=device.split(",")[0])
     print(to_markdown(report))
 
     if args.robustness:
-        # меряем здесь, а не отдельной ячейкой ноутбука: так замер не зависит от того,
-        # какая версия ноутбука оказалась у запускающего
+        # measured here rather than in a separate notebook cell, so the measurement does not
+        # depend on which version of the notebook the runner happens to have
         command = [
             sys.executable, str(ROOT / "scripts" / "robustness.py"),
             "--data", str(args.data), "--weights", str(target), "--split", split,
             "--limit", str(args.robustness), "--imgsz", str(args.imgsz),
             "--batch", str(args.batch), "--device", device.split(",")[0],
         ]
-        print(f"\nзамер устойчивости: {' '.join(command[1:])}")
-        subprocess.run(command, check=False)  # неудача замера не должна ронять результат обучения
+        print(f"\nrobustness run: {' '.join(command[1:])}")
+        subprocess.run(command, check=False)  # a failed measurement must not break the training result
 
 
 if __name__ == "__main__":

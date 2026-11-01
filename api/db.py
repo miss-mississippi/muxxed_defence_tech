@@ -1,4 +1,4 @@
-"""SQLite-каталог сцен и обнаружений."""
+"""SQLite catalogue of scenes and detections."""
 from __future__ import annotations
 
 import json
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     elapsed_s       REAL,
     model           TEXT,
     warnings        TEXT,                              -- JSON list
-    completeness_at TEXT,                              -- когда оператор отметил все пропуски
+    completeness_at TEXT,                              -- when the operator marked all misses
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
@@ -36,10 +36,10 @@ CREATE TABLE IF NOT EXISTS detections (
     scene_id        INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
     class_id        INTEGER NOT NULL,
     class_name      TEXT NOT NULL,
-    model           TEXT,                              -- какая модель нашла объект
+    model           TEXT,                              -- which model found the object
     confidence      REAL NOT NULL,
-    polygon_px      TEXT NOT NULL,                     -- JSON [[x, y] x4], пиксели сцены
-    geometry        TEXT,                              -- JSON GeoJSON Polygon (WGS84) или NULL
+    polygon_px      TEXT NOT NULL,                     -- JSON [[x, y] x4], scene pixels
+    geometry        TEXT,                              -- JSON GeoJSON Polygon (WGS84) or NULL
     cx REAL, cy REAL, w REAL, h REAL, angle REAL,
     center_lon      REAL,
     center_lat      REAL,
@@ -47,21 +47,21 @@ CREATE TABLE IF NOT EXISTS detections (
     width_m         REAL,
     orientation_deg REAL,
     size_check      TEXT,                              -- ok | borderline | mismatch | unknown
-    size_deviation  REAL,                              -- относительное расхождение с паспортным размером
+    size_deviation  REAL,                              -- relative deviation from the reference size
     review_status   TEXT NOT NULL DEFAULT 'pending',   -- pending | confirmed | rejected
-    review_class    TEXT,                              -- класс, исправленный экспертом
+    review_class    TEXT,                              -- class corrected by the operator
     review_comment  TEXT,
     reviewed_at     TEXT
 );
 
--- объекты, которые модель пропустила: нужны для оценки полноты
+-- objects the model missed: needed to measure recall
 CREATE TABLE IF NOT EXISTS missed (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     scene_id        INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
     class_name      TEXT NOT NULL,
     center_lon      REAL,
     center_lat      REAL,
-    cx              REAL,                              -- пиксели, для снимков без геопривязки
+    cx              REAL,                              -- pixels, for images without georeferencing
     cy              REAL,
     comment         TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -85,7 +85,7 @@ def init(path: Path) -> None:
     with session(path) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
-        # каталоги, созданные до появления этих колонок
+        # catalogues created before these columns existed
         for column, ddl in (("model", "TEXT"), ("size_check", "TEXT"), ("size_deviation", "REAL")):
             try:
                 conn.execute(f"ALTER TABLE detections ADD COLUMN {column} {ddl}")

@@ -1,10 +1,10 @@
-"""Детекция на целой сцене (GeoTIFF/JPG/PNG): тайлы → YOLO-OBB → склейка → GeoJSON.
+"""Whole-scene detection (GeoTIFF/JPG/PNG): tiles -> YOLO-OBB -> merge -> GeoJSON.
 
     python scripts/detect_scene.py data/scenes/airport.tif
     python scripts/detect_scene.py scene.tif --tile 1024 --overlap 200 --conf 0.3
 
-Результат: outputs/<имя>.geojson (WGS84, если снимок геопривязан) и
-outputs/<имя>_overview.jpg (уменьшенная сцена с боксами для быстрой проверки).
+Output: outputs/<name>.geojson (WGS84 if the image is georeferenced) and
+outputs/<name>_overview.jpg (downscaled scene with boxes for a quick look).
 """
 from __future__ import annotations
 
@@ -40,20 +40,20 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("source", type=Path)
     p.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
-    p.add_argument("--device", default=None, help="cpu | mps | 0 (по умолчанию — автовыбор)")
+    p.add_argument("--device", default=None, help="cpu | mps | 0 (auto-selected by default)")
     p.add_argument("--imgsz", type=int, default=1024)
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--tile", type=int, default=1024)
     p.add_argument("--overlap", type=int, default=200)
     p.add_argument("--batch", type=int, default=4)
-    p.add_argument("--ios", type=float, default=0.6, help="порог IoS склейки дублей (>1 — не склеивать)")
+    p.add_argument("--ios", type=float, default=0.6, help="IoS threshold for merging duplicates (>1 disables merging)")
     p.add_argument("--out", type=Path, default=ROOT / "outputs")
     args = p.parse_args()
 
     detector = Detector(args.weights, device=args.device, imgsz=args.imgsz, conf=args.conf)
 
     def progress(done: int, total: int) -> None:
-        print(f"\rтайлы: {done}/{total}", end="", flush=True)
+        print(f"\rtiles: {done}/{total}", end="", flush=True)
 
     result = detect_scene(
         detector,
@@ -73,9 +73,9 @@ def main() -> None:
     cv2.imwrite(str(overview_path), overview(result))
 
     s = result.summary()
-    print(f"{args.source.name}: {s['width']}x{s['height']}, crs={s['crs']}, gsd={s['gsd_m']} м/px")
-    print(f"тайлов: {s['tiles_total']} (пустых {s['tiles_skipped']}), время {s['elapsed_s']} с, device={detector.device}")
-    print(f"детекций: {s['detections']}  {s['counts']}")
+    print(f"{args.source.name}: {s['width']}x{s['height']}, crs={s['crs']}, gsd={s['gsd_m']} m/px")
+    print(f"tiles: {s['tiles_total']} ({s['tiles_skipped']} empty), time {s['elapsed_s']} s, device={detector.device}")
+    print(f"detections: {s['detections']}  {s['counts']}")
     for w in s["warnings"]:
         print(f"! {w}")
     print(f"-> {geojson_path}\n-> {overview_path}")

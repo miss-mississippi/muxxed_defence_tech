@@ -4,7 +4,7 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 
-# веса, данные и результаты — не в git
+# weights, data and outputs are not committed
 weights/
 *.pt
 data/

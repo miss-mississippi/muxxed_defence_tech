@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 from detector import Detector  # noqa: E402
 
 SAMPLE = ROOT / "samples" / "boats.jpg"
-# синтетическая геопривязка: UTM 42N (район Астаны), пиксель 0.1 м
+# synthetic georeferencing: UTM 42N (around Astana), 0.1 m pixels
 UTM_CRS = "EPSG:32642"
 UTM_ORIGIN = (500000.0, 5670000.0)
 UTM_PIXEL_M = 0.1
@@ -31,7 +31,7 @@ def boats_rgb() -> np.ndarray:
 
 @pytest.fixture(scope="session")
 def utm_uint16_tif(tmp_path_factory, boats_rgb) -> Path:
-    """boats.jpg как 16-битный GeoTIFF в UTM — проверяет растяжку, тайлинг и геопривязку."""
+    """boats.jpg as a 16-bit GeoTIFF in UTM: exercises stretching, tiling and georeferencing."""
     path = tmp_path_factory.mktemp("scenes") / "boats_utm_u16.tif"
     h, w = boats_rgb.shape[:2]
     data = (boats_rgb.astype(np.uint16) * 40 + 300).transpose(2, 0, 1)

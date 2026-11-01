@@ -1,12 +1,12 @@
-"""Формат детекции — контракт между ML-модулем и геосервисом.
+"""Detection format: the contract between the ML module and the geo service.
 
-Координаты — в пикселях всей сцены (не тайла): начало в левом верхнем углу
-левого верхнего пикселя, x вправо (столбцы), y вниз (строки). Это та же
-конвенция, что у affine-трансформа rasterio, поэтому перевод в CRS снимка:
+Coordinates are in pixels of the whole scene (not the tile): the origin is the top-left corner
+of the top-left pixel, x grows to the right (columns), y grows down (rows). This is the same
+convention as the rasterio affine transform, so converting to the image CRS is just:
 
     x_geo, y_geo = dataset.transform * (x, y)
 
-Если CRS снимка не EPSG:4326 — после этого перепроецировать в WGS84 (pyproj).
+If the image CRS is not EPSG:4326, reproject to WGS84 afterwards (pyproj).
 """
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ class Detection:
     class_id: int
     class_name: str
     confidence: float
-    # 4 угла повёрнутого бокса [[x, y], ...] в порядке ultralytics (xyxyxyxy)
+    # 4 corners of the rotated box [[x, y], ...] in ultralytics order (xyxyxyxy)
     polygon: list[list[float]]
-    # центр, ширина, высота — пиксели; угол — радианы (как xywhr в ultralytics)
+    # centre, width, height in pixels; angle in radians (as in ultralytics xywhr)
     cx: float
     cy: float
     w: float
     h: float
     angle: float
-    # имя модели: общая DOTA или дообученная по типам техники (см. detector/registry.py)
+    # model name: the general DOTA model or the fine-tuned type model (see detector/registry.py)
     model: str = ""
 
     def to_dict(self) -> dict:

@@ -1,9 +1,9 @@
 {
-  "note": "УСЛОВНЫЙ реестр для демонстрации механизма сверки. Аэродром — гражданский King Shaka (Дурбан, ЮАР), числящиеся борта выдуманы. Настоящий реестр — данные заказчика: он передаётся в запросе, не сохраняется и в этот репозиторий не попадает.",
+  "note": "MOCK registry that only demonstrates the reconciliation mechanism. The airfield is the civilian King Shaka airport (Durban, South Africa) and the listed aircraft are invented. A real registry is customer data: it is passed in the request, never stored, and never committed to this repository.",
   "airfields": [
     {
       "id": "demo-airfield",
-      "name": "Демо-аэродром (условный)",
+      "name": "Demo airfield (mock)",
       "area": {
         "type": "Polygon",
         "coordinates": [[

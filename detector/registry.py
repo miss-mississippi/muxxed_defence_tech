@@ -1,8 +1,8 @@
-"""Несколько моделей одновременно: общая (DOTA: суда, резервуары, техника)
-и дообученная по типам (MAR20: типы военных самолётов).
+"""Several models at once: a general one (DOTA: ships, storage tanks, vehicles)
+and a fine-tuned type model (MAR20: military aircraft types).
 
-Каждая детекция помечается именем модели. Если один объект нашли обе модели,
-побеждает более приоритетная — специализированная важнее общей (`merge.suppress_cross_model`).
+Every detection is tagged with its model name. If both models found the same object,
+the higher-priority one wins: the specialised model outranks the general one (`merge.suppress_cross_model`).
 """
 from __future__ import annotations
 
@@ -20,16 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 class ModelSpec:
     name: str
     weights: Path
-    priority: int = 0  # при наложении объектов выигрывает модель с большим приоритетом
-    # уточняющая модель: её детекции живут только там, где объект нашла и общая модель.
-    # Без этого модель типов самолётов «узнаёт» их в кранах и контейнерах порта.
+    priority: int = 0  # when objects overlap, the model with the higher priority wins
+    # refining model: its detections survive only where the general model found the object too.
+    # Without this the aircraft type model "sees" aircraft in port cranes and containers.
     refine_only: bool = False
-    # NMS без учёта класса: один объект не может быть двух типов сразу (C-5 и C-17 на одном самолёте)
+    # class-agnostic NMS: one object cannot be two types at once (C-5 and C-17 on the same aircraft)
     agnostic_nms: bool = False
 
 
 class ModelRegistry:
-    """Прогоняет изображение через все модели и складывает детекции в один список."""
+    """Runs an image through every model and collects the detections into one list."""
 
     def __init__(
         self,
@@ -41,7 +41,7 @@ class ModelRegistry:
     ):
         specs = list(specs)
         if not specs:
-            raise ValueError("нужна хотя бы одна модель")
+            raise ValueError("at least one model is required")
         self.specs = {s.name: s for s in specs}
         self.detectors = {
             s.name: Detector(
@@ -53,7 +53,7 @@ class ModelRegistry:
 
     @classmethod
     def single(cls, detector: Detector) -> "ModelRegistry":
-        """Обёртка вокруг уже загруженной модели — чтобы старый код работал без изменений."""
+        """Wraps an already loaded model so that single-model code keeps working unchanged."""
         registry = cls.__new__(cls)
         registry.specs = {detector.name: ModelSpec(detector.name, detector.weights)}
         registry.detectors = {detector.name: detector}
@@ -64,14 +64,14 @@ class ModelRegistry:
         cls, value: str | None = None, device: str | None = None, imgsz: int = 1024, conf: float = 0.25
     ) -> "ModelRegistry":
         """value: "dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt:refine".
-        Порядок задаёт приоритет: следующая модель важнее предыдущей.
-        Суффикс `:refine` — модель только уточняет тип там, где объект нашла общая модель.
-        Пусто — одна предобученная модель DOTA."""
+        Order sets priority: each model outranks the one before it.
+        The `:refine` suffix means the model only refines the type where the general model found an object.
+        Empty means a single pretrained DOTA model."""
         specs = []
         for priority, item in enumerate(v.strip() for v in (value or "").split(",") if v.strip()):
             name, _, path = item.partition("=")
             if not path:
-                raise ValueError(f"ожидается имя=путь, получено {item!r}")
+                raise ValueError(f"expected name=path, got {item!r}")
             path, refine = path.strip(), False
             if path.endswith(":refine"):
                 path, refine = path[: -len(":refine")], True

@@ -1,4 +1,4 @@
-"""Расчёт полноты по сцене (api/recall.py)."""
+"""Per-scene recall (api/recall.py)."""
 from __future__ import annotations
 
 from api.recall import scene_recall
@@ -20,7 +20,7 @@ def test_rejected_are_not_objects_and_pending_is_warned():
     dets = [det("ship", 0.9), det("ship", 0.9, status="rejected"), det("ship", 0.9, status="pending")]
     r = scene_recall(dets, [], complete=True)
     assert r["total"]["exist"] == 1
-    assert any("не проверены" in w for w in r["warnings"])
+    assert any("not reviewed" in w for w in r["warnings"])
 
 
 def test_by_class_uses_operator_class():
@@ -28,14 +28,14 @@ def test_by_class_uses_operator_class():
     r = scene_recall(dets, [{"class_name": "small vehicle"}], complete=True)
     assert set(r["by_class"]) == {"plane", "small vehicle"}
     sv = r["by_class"]["small vehicle"]
-    # мелкая техника с уверенностью 0.3 теряется при пороге карты 0.4
+    # a small vehicle at confidence 0.3 is lost at the map threshold of 0.4
     assert sv["recall"] == {"0.25": 0.5, "0.4": 0.0}
 
 
 def test_incomplete_marking_is_only_an_upper_bound():
     r = scene_recall([det("ship", 0.9)], [], complete=False)
     assert r["total"]["recall"]["0.25"] == 1.0
-    assert any("верхняя оценка" in w for w in r["warnings"])
+    assert any("upper bound" in w for w in r["warnings"])
 
 
 def test_empty_scene():
