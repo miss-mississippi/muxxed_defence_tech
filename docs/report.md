@@ -1,289 +1,286 @@
-# Программный комплекс автоматизированной идентификации объектов на космических снимках
+# Technical report: automated object identification in satellite imagery
 
-Материалы к ТЗ №3 (Центр военно-космических программ МО РК). Документ собирает аналитическую часть,
-требования, методики и результаты. Числовые результаты и журнал решений — в [NOTES.md](../NOTES.md),
-графики обучения — в [docs/training](training).
+Prepared for Task 3 of the NU STeP × Defense Tech Challenge (Astana, 2026), set by the Military Space
+Programmes Centre of the Ministry of Defence of Kazakhstan. This document collects the analysis,
+requirements, methodology and results. Raw numbers and the decision log are in
+[NOTES.md](../NOTES.md); training plots are in [docs/training](training).
 
-## 1. Назначение и состав
+## 1. Purpose and components
 
-Комплекс принимает космический снимок, находит на нём объекты, определяет их класс и тип,
-привязывает к местности и отдаёт результат в виде каталога и GeoJSON для внешней платформы.
+The system takes a satellite image, finds objects in it, determines their class and type, georeferences
+them and returns the result as a catalogue and as GeoJSON for an external platform.
 
-| Модуль ТЗ | Где реализован |
+| Requirement | Where it is implemented |
 |---|---|
-| Загрузка и подготовка данных | `POST /api/scenes`, `detector/scene.py` |
-| Предварительная обработка | `detector/scene.py`: тайлинг, растяжка разрядности, выбор каналов, отсев пустых тайлов |
-| Автоматизированное обнаружение | `detector/model.py`, `detector/registry.py` |
-| Классификация | вторая модель в реестре (типы техники), режим уточнения |
-| Пространственное выделение | ориентированные боксы, `detector/schema.py` |
-| Визуализация | `web/index.html` (Leaflet) |
-| Формирование отчётов | `GET /api/scenes/{id}/report` |
-| Интерфейсы интеграции | REST + GeoJSON, `POST /api/detect` |
-| Визуальная проверка оператором | `PATCH /api/detections/{id}`, карта, `scripts/export_reviewed.py` |
+| Data ingestion and preparation | `POST /api/scenes`, `detector/scene.py` |
+| Pre-processing | `detector/scene.py`: tiling, bit-depth stretch, band selection, empty-tile filtering |
+| Automated detection | `detector/model.py`, `detector/registry.py` |
+| Classification | second model in the registry (equipment types), refine mode |
+| Spatial delineation | oriented bounding boxes, `detector/schema.py` |
+| Visualisation | `web/index.html` (Leaflet) |
+| Reporting | `GET /api/scenes/{id}/report` |
+| Integration interfaces | REST + GeoJSON, `POST /api/detect` |
+| Operator review | `PATCH /api/detections/{id}`, the map, `scripts/export_reviewed.py` |
 
-## 2. Аналитический обзор методов
+## 2. Methods
 
-**Почему ориентированные боксы (OBB), а не обычные.** На снимке сверху объекты лежат под произвольным
-углом и вплотную: самолёты на перроне, суда у причала, техника на стоянке. Горизонтальный бокс такого
-объекта наполовину состоит из фона, соседние боксы перекрываются, и подавление дублей вырезает
-настоящие объекты. Ориентированный бокс дополнительно даёт курс объекта — для анализа обстановки это
-самостоятельная величина, комплекс выдаёт её как азимут длинной оси.
+**Why oriented boxes (OBB) rather than axis-aligned ones.** In overhead imagery objects lie at arbitrary
+angles and close together: aircraft on an apron, ships at a berth, vehicles in a parking lot. An
+axis-aligned box around such an object is half background, neighbouring boxes overlap, and duplicate
+suppression removes real objects. An oriented box also gives the object's heading, which is a quantity
+of its own for situation analysis; the system reports it as the azimuth of the long axis.
 
-**Выбор семейства детекторов.** Двухэтапные детекторы (Oriented R-CNN, ReDet) дают на DOTA чуть более
-высокую точность, но тяжелее по времени и сложнее в развёртывании. Одноэтапные (YOLO-OBB, RTMDet-R)
-проигрывают доли процента mAP, но обрабатывают тайл за десятки миллисекунд и разворачиваются одним
-файлом весов. Для комплекса, который должен просматривать тысячи квадратных километров, решает
-пропускная способность, поэтому взят YOLO11-OBB.
+**Choice of detector family.** Two-stage detectors (Oriented R-CNN, ReDet) are slightly more accurate on
+DOTA but slower and harder to deploy. One-stage detectors (YOLO-OBB, RTMDet-R) give up a fraction of a
+percent of mAP, process a tile in tens of milliseconds and deploy as a single weights file. For a system
+that has to scan thousands of square kilometres throughput decides, so we chose YOLO11-OBB.
 
-**Почему трансферное обучение.** Обучение детектора с нуля требует десятков тысяч размеченных снимков
-и недель расчётов. Веса, предобученные на DOTA, уже содержат представления объектов съёмки сверху;
-дообучение под новые классы занимает десятки минут на двух GPU и требует тысяч, а не десятков тысяч
-примеров. Это осознанный инженерный выбор, а не упрощение.
+**Why transfer learning.** Training a detector from scratch needs tens of thousands of labelled images
+and weeks of compute. Weights pretrained on DOTA already encode overhead-imagery objects; fine-tuning for
+new classes takes tens of minutes on two GPUs and needs thousands, not tens of thousands, of examples.
+This is a deliberate engineering choice, not a shortcut.
 
-**Двухуровневая схема распознавания.** Общая модель (DOTA, 15 классов) отвечает за выявление:
-суда, резервуары, техника, гавани, мосты, самолёты. Специализированная модель (MAR20, 20 типов
-военных самолётов) отвечает за распознавание типа и работает только поверх находок общей модели.
-Такое разделение позволяет расширять перечень типов, не переобучая общую модель, и не теряет
-остальные классы при добавлении новой специализации.
+**Two-level recognition.** A general model (DOTA, 15 classes) handles detection: ships, storage tanks,
+vehicles, harbours, bridges, aircraft. A specialised model (MAR20, 20 military aircraft types) handles
+type recognition and runs only on top of the general model's detections. This split lets us add types
+without retraining the general model and without losing the other classes when a new specialisation is
+added.
 
-**Проверка классификации физикой.** Комплекс геопривязан, поэтому у каждого объекта есть не только
-класс, но и размер в метрах. Это даёт контроль, недоступный детектору без геопривязки: измеренные
-габариты сверяются с паспортными для заявленного типа (`detector/physical.py`). Вердиктов три,
-а не порог: до 15% расхождение объясняется ошибкой бокса, тенью и точностью геопривязки —
-«габариты сходятся»; от 15 до 25% — «на границе допуска»; дальше — «тип не подтверждён
-геометрией». Вердикт виден в каталоге, в отчёте и отдельным фильтром на карте.
+**Checking classification with physics.** The system is georeferenced, so every object has not only a
+class but also a size in metres. That enables a check a non-georeferenced detector cannot do: the
+measured dimensions are compared with the reference dimensions of the claimed type
+(`detector/physical.py`). There are three verdicts rather than one threshold: up to 15% deviation is
+explained by box error, shadows and georeferencing accuracy ("size matches"); 15–25% is "borderline";
+beyond that the type is "not confirmed by size". The verdict is shown in the catalogue, in the report and
+as a separate map filter.
 
-Двоичный порог у самой границы вводит в заблуждение: на демо-сцене один C-17 разошёлся
-с паспортом на 24.7% и при жёстком пороге 25% прошёл бы как достоверный, отличаясь от
-паспортного размера на четверть. Третья градация снимает и этот случай, и вопрос «почему
-допуск именно 25».
+A binary threshold misleads right at the boundary: on the demo scene one C-17 deviated from its reference
+by 24.7%, and with a hard 25% threshold it would have passed as valid while being a quarter off the
+reference size. The third grade handles this case and answers the question "why exactly 25%".
 
-Проверка не зависит от нейросети и потому ловит ошибку там, где модель уверена: C-17 с уверенностью
-0.83 измерен как 28.2 м при паспортных 53.0 — расхождение 49.0%, вердикт «тип не подтверждён».
-Самый грубый промах по размеру (C-5, 38.8 м против 75.5 м) модель выдала с уверенностью 0.55 —
-то есть уверенность и правдоподобие габаритов независимы, и проверка добавляет второй признак
-там, где первый ничего не подсказывает. Границы приёма
-называем сразу: совпадение габаритов не доказывает тип — E-8 построен на базе Boeing 707,
-сходится с паспортом на 6.8% и проверку проходит, оставаясь гражданским бортом. Таблица
-эталонов пока покрывает 20 типов самолётов.
+The check is independent of the neural network, so it catches errors where the model is confident: a
+C-17 at confidence 0.83 measured 28.2 m against the reference 53.0 m, a 49.0% deviation and the verdict
+"type not confirmed". The largest size error (a C-5 at 38.8 m against 75.5 m) had a low confidence of
+0.55. So confidence and size plausibility are independent, and the check adds a second signal where the
+first one says nothing. Its limits are stated upfront: matching dimensions do not prove the type. The
+E-8 is built on the Boeing 707 airframe, matches its reference within 6.8% and passes while being a
+civilian aircraft. The reference table currently covers 20 aircraft types.
 
-## 3. Особенности космических снимков и требования к исходным данным
+## 3. Satellite imagery specifics and input requirements
 
-| Фактор | Влияние | Как учтено |
+| Factor | Effect | How it is handled |
 |---|---|---|
-| Пространственное разрешение | граница измерена, а не оценена: резервуары держатся до 2 м, техника пропадает уже на 1–2 м, при 10 м остаются единицы | требование ≤1 м, предупреждение в результате при GSD > 2 м, таблица замера в разделе 7 |
-| Разрядность | данные ДЗЗ обычно 11–16 бит | растяжка по перцентилям 2–98 одна на всю сцену |
-| Спектральный состав | модели обучены на RGB | каналы R, G, B берутся по цветовой интерпретации GeoTIFF, панхром дублируется |
-| Освещённость и дымка | снижают контраст | проверка устойчивости `scripts/robustness.py` |
-| Углы съёмки | наклон искажает форму | демо-сцены сняты с отклонением ~28° |
-| Размер сцены | сцены в десятки тысяч пикселей | тайлинг 1024 с перекрытием 200 и склейка на стыках |
-| Отсутствие данных | чёрные поля, nodata | тайл отбрасывается по маске и сырым значениям |
+| Spatial resolution | the limit is measured, not estimated: storage tanks hold up to 2 m, vehicles disappear at 1–2 m, at 10 m only a handful of detections remain | requirement of ≤1 m, a warning in the result when GSD > 2 m, the measurement table in section 7 |
+| Bit depth | remote sensing data is usually 11–16 bit | one 2–98 percentile stretch for the whole scene |
+| Spectral bands | the models are trained on RGB | R, G, B are selected from the GeoTIFF colour interpretation; panchromatic is replicated |
+| Illumination and haze | reduce contrast | robustness measured with `scripts/robustness.py` |
+| Viewing angle | off-nadir views distort shape | the demo scenes were captured ~28° off-nadir |
+| Scene size | scenes are tens of thousands of pixels across | 1024 px tiles with 200 px overlap and merging at the seams |
+| Missing data | black borders, nodata | tiles are dropped using the mask and raw values |
 
-## 4. Требования к комплексу
+## 4. System requirements
 
-- **К данным:** GeoTIFF с геопривязкой (любая CRS), RGB или панхром, GSD ≤1 м, 8–16 бит.
-  Поддерживаются и снимки без привязки — результат тогда в пикселях.
-- **К точности:** целевой ориентир — mAP50 не ниже 0.85 на целевом наборе классов; достигнуто 0.899
-  на официальном тесте MAR20.
-- **К производительности:** не менее 1000 км²/ч на одной машине без серверной GPU. Достигнуто около
-  3600 км²/ч при 0.5 м/px на ноутбуке с Apple M1, на его же CPU — около 1050 км²/ч. Замер на
-  синтетической сцене одной моделью; при реальных 0.3 м/px это ~1300 км²/ч.
-- **К масштабируемости:** обработка сцены разбита на независимые тайлы, модели загружаются реестром,
-  добавление новой модели — одна переменная окружения.
-- **К информационной безопасности:** веса и данные остаются в контуре, комплекс не обращается к
-  внешним сервисам при обработке. Единственный внешний запрос — тайлы подложки карты, поэтому в
-  интерфейсе предусмотрен режим «без подложки» для закрытого контура.
-- **К воспроизводимости:** версии библиотек зафиксированы, обучение с фиксированным seed,
-  60 автоматических тестов покрывают тайлинг, склейку, геопривязку, конвертер данных, API,
-  сверку габаритов с паспортными, сверку с реестром и расчёт полноты.
+- **Data:** georeferenced GeoTIFF (any CRS), RGB or panchromatic, GSD ≤1 m, 8–16 bit. Non-georeferenced
+  images are also accepted; the output is then in pixels.
+- **Accuracy:** target mAP50 of at least 0.85 on the target class set; achieved 0.899 on the official
+  MAR20 test set.
+- **Throughput:** at least 1000 km²/h on one machine without a server GPU. Achieved about 3600 km²/h at
+  0.5 m/px on an Apple M1 laptop, and about 1050 km²/h on its CPU. Measured on a synthetic scene with one
+  model; at a realistic 0.3 m/px this is ~1300 km²/h.
+- **Scalability:** scene processing is split into independent tiles, models are loaded by a registry,
+  and adding a model is one environment variable.
+- **Information security:** weights and data stay inside the network; the system makes no external calls
+  while processing. The only external request is basemap tiles, so the interface has a "no basemap" mode
+  for isolated networks.
+- **Reproducibility:** library versions are pinned, training uses a fixed seed, and 60 automated tests
+  cover tiling, merging, georeferencing, the data converter, the API, the size check, registry
+  reconciliation and recall.
 
-## 5. Методика подготовки обучающих данных
+## 5. Training data methodology
 
-1. Исходная разметка приводится к формату YOLO-OBB: четыре угла, нормированные к размеру снимка
+1. Source labels are converted to YOLO-OBB: four corners normalised to the image size
    (`scripts/prepare_mar20.py`).
-2. Контроль качества на входе: сверяется наличие пары «снимок — разметка», размер снимка берётся из
-   файла, если в разметке он нулевой, координаты обрезаются по границам кадра. Итоговая статистика
-   по классам и сплитам сохраняется рядом с датасетом.
-3. Сплиты: обучающая и валидационная выборки выделяются из train исходного датасета, тест остаётся
-   нетронутым — метрики считаются на нём, выбор эпохи на него не влияет.
-4. Аугментации при обучении соответствуют съёмке сверху: отражения по обеим осям, мозаика,
-   при необходимости поворот. Отключение мозаики на последних эпохах.
-5. Актуализация: подтверждённые оператором обнаружения превращаются в новый обучающий материал
-   (`scripts/export_reviewed.py`). В датасет попадают только полностью проверенные тайлы, иначе
-   непроверенный объект стал бы «фоном» и учил модель его пропускать.
+2. Input quality control: every image must have a label file, the image size is read from the file when
+   the label has a zero size, and coordinates are clipped to the frame. Per-class and per-split
+   statistics are saved next to the dataset.
+3. Splits: train and validation are carved out of the source train set; the test set stays untouched.
+   Metrics are computed on it and epoch selection never sees it.
+4. Augmentations suit overhead imagery: flips on both axes, mosaic, optional rotation, mosaic disabled for
+   the last epochs; Gaussian noise optionally (see section 7).
+5. Updating: detections confirmed by the operator become new training material
+   (`scripts/export_reviewed.py`). Only fully reviewed tiles enter the dataset; otherwise an unreviewed
+   object would become "background" and teach the model to miss it.
 
-## 6. Методика оценки качества
+## 6. Evaluation methodology
 
-- **Показатели:** mAP50 и mAP50-95, точность и полнота по каждому классу, время обработки снимка и
-  сцены, пропускная способность в км²/ч, устойчивость к ухудшению качества снимка.
-- **На чём считаем:** официальный тестовый сплит датасета; демо-сцены оцениваются визуальной
-  проверкой оператором через интерфейс, поскольку эталонной разметки для них нет. Для типов
-  самолётов к этому добавляется независимая от нейросети сверка измеренных габаритов
-  с паспортными (`detector/physical.py`).
-- **Чем считаем:** `scripts/eval.py` (метрики), `scripts/benchmark.py` (пропускная способность),
-  `scripts/robustness.py` (устойчивость).
-- **Воспроизведение:** команды приведены в [README](../README.md), результаты сохраняются в
-  `outputs/` как JSON и Markdown.
+- **Metrics:** mAP50 and mAP50-95, per-class precision and recall, image and scene processing time,
+  throughput in km²/h, robustness to image degradation.
+- **Data:** the dataset's official test split; the demo scenes are evaluated by operator review in the
+  interface because they have no reference labels. For aircraft types this is complemented by the
+  network-independent size check (`detector/physical.py`).
+- **Tools:** `scripts/eval.py` (metrics), `scripts/benchmark.py` (throughput), `scripts/robustness.py`
+  (robustness).
+- **Reproduction:** commands are in the [README](../README.md); results are saved to `outputs/` as JSON and
+  Markdown.
 
-## 7. Результаты
+## 7. Results
 
-- Распознавание типов военных самолётов: mAP50 **0.899**, mAP50-95 **0.786**, точность 0.879,
-  полнота 0.841 на 2511 снимках теста MAR20. Разбивка по 20 классам — в [NOTES.md](../NOTES.md).
-- **Сравнение архитектур.** В одинаковых условиях обучены две модели: yolo11s (mAP50 0.899,
-  15.7 мс/снимок) и yolo11m (mAP50 0.904, 43.7 мс/снимок). Прирост точности 0.5% при падении
-  скорости в 2.8 раза, поэтому в комплексе по умолчанию используется yolo11s; yolo11m остаётся
-  вариантом для архивной обработки, где пропускная способность не критична. По отдельным классам
-  модели расходятся сильнее среднего (F-22: 0.589 против 0.717 в пользу m; F-16: 0.747 против
-  0.649 в пользу s), что указывает на нехватку примеров этих типов, а не на нехватку ёмкости модели.
-- Производительность: **синтетическая** сцена 8192×8192 при 0.5 м/px (16.8 км²) — 16.8 с на Apple M1
-  (MPS), 57.4 с на его же CPU; прогон одной моделью DOTA, без MAR20. Пропускная способность зависит
-  от разрешения квадратично: ~3600 км²/ч при 0.5 м/px и ~1300 км²/ч при реальных 0.3 м/px.
-- Реальные снимки (Maxar Open Data, Дурбан, 0.305 м/px): на аэродроме найдены самолёты с типами,
-  на контейнерном терминале — суда и техника, на нефтебазе — 105 резервуаров.
-- **Визуальная проверка оператором:** просмотрены все 201 обнаружение на трёх сценах. Считаем
-  две разные величины, потому что одна их смешивает и скрывает провал:
+- Military aircraft type recognition: mAP50 **0.899**, mAP50-95 **0.786**, precision 0.879, recall 0.841
+  on the 2511-image MAR20 test set. Per-class breakdown in [NOTES.md](../NOTES.md).
+- **Architecture comparison.** Two models were trained under identical conditions: yolo11s (mAP50 0.899,
+  15.7 ms/image) and yolo11m (mAP50 0.904, 43.7 ms/image). A 0.5% accuracy gain for a 2.8× slowdown, so
+  yolo11s is the default and yolo11m stays an option for archive processing where throughput is not
+  critical. Per class the models differ more than on average (F-22: 0.589 vs 0.717 in favour of m;
+  F-16: 0.747 vs 0.649 in favour of s), which points to a lack of examples of these types rather than a
+  lack of model capacity.
+- Throughput: a **synthetic** 8192×8192 scene at 0.5 m/px (16.8 km²) takes 16.8 s on an Apple M1 (MPS)
+  and 57.4 s on its CPU, with one DOTA model and no MAR20. Throughput scales with the square of the
+  resolution: ~3600 km²/h at 0.5 m/px and ~1300 km²/h at a realistic 0.3 m/px.
+- Real imagery (Maxar Open Data, Durban, 0.305 m/px): aircraft with types on the airfield, ships and
+  vehicles on the container terminal, 105 storage tanks on the oil terminal (at conf ≥ 0.4).
+- **Operator review:** all 201 detections on three scenes were reviewed. Two different quantities are
+  reported, because a single one mixes them and hides a failure:
 
-  | Что проверяем | Все сцены | Аэродром King Shaka |
+  | What is checked | All scenes | King Shaka airfield |
   |---|---|---|
-  | объект действительно есть | 189/201 = **0.940** | 5/7 = 0.714 |
-  | класс или тип выдан верно | 185/201 = **0.920** | 1/7 = **0.143** |
+  | the object is really there | 189/201 = **0.940** | 5/7 = 0.714 |
+  | class or type is correct | 185/201 = **0.920** | 1/7 = **0.143** |
 
-  Разрыв на аэродроме объясняется прямо: King Shaka — **гражданский** международный аэропорт,
-  а в MAR20 гражданских классов нет, поэтому все четыре борта получили военные типы
-  (E-8, C-17 ×2, C-5). Объекты найдены верно, типы недостоверны; при проверке им проставлен
-  класс `plane` — «самолёт, тип не определён».
-  Самый слабый класс по наличию объекта — суда (0.500): обрезки судна у портовых кранов.
-- **Как проверялось.** Один оператор, 201 объект за 13 минут 50 секунд — около 4 секунд на объект.
-  Это визуальный контроль на экране, а не экспертиза: аттестованных дешифровщиков в команде нет.
-  Величина характеризует точность; **полнота неизвестна** — пропущенные моделью объекты в разметку
-  не попадают по построению.
-- **Цикл дообучения проверен на реальных данных:** проверенные обнаружения выгружены в датасет —
-  51 тайл, 331 объект для общей модели и 5 объектов для модели типов.
-- Устойчивость к качеству снимка: смаз, JPEG-сжатие, падение разрешения вдвое, слабая освещённость
-  и дымка стоят не более 5% mAP50 — это **относительная** потеря, а не процентные пункты;
-  замер шёл на подвыборке из 400 снимков теста (её база 0.900 против 0.899 на полных 2511); сенсорный шум роняет метрику с 0.900 до 0.371 (σ=15) и 0.063
-  (σ=30). Таблица и выводы — [docs/training/robustness.md](training/robustness.md).
-- **Граница применимости по разрешению измерена, а не оценена.** Демо-сцену нефтебазы (0.305 м/px)
-  последовательно огрубляли и прогоняли одной моделью с одним порогом 0.25:
+  The airfield gap has a direct explanation: King Shaka is a **civilian** international airport, MAR20
+  has no civilian classes, so all four aircraft got military types (E-8, C-17 ×2, C-5). The objects are
+  found correctly, the types are not reliable; during review they were relabelled `plane`, "aircraft,
+  type not determined". The weakest class by object presence is ships (0.500): fragments of a ship under
+  port cranes.
+- **How the review was done.** One operator, 201 objects in 13 minutes 50 seconds, about 4 seconds per
+  object. This is on-screen verification, not expert assessment: the team has no certified image
+  analysts. The number measures precision; **recall is unknown**, because objects the model missed never
+  enter the review by construction.
+- **The fine-tuning loop works on real data:** reviewed detections were exported into a dataset of
+  51 tiles, with 331 labels for the general model and 5 for the type model.
+- Robustness to image quality: blur, JPEG compression, halved resolution, low light and haze cost no more
+  than 5% mAP50. This is a **relative** loss, not percentage points; the measurement used a 400-image
+  subset of the test set (its baseline is 0.900 vs 0.899 on all 2511). Sensor noise drops the metric from
+  0.900 to 0.371 (σ=15) and 0.063 (σ=30). Table and conclusions:
+  [docs/training/robustness.md](training/robustness.md).
+- **The resolution limit is measured, not estimated.** The oil-terminal demo scene (0.305 m/px) was
+  progressively degraded and processed with one model at one threshold of 0.25:
 
-  | GSD | Размер, px | Всего | Резервуары | Остальное |
+  | GSD | Size, px | Total | Storage tanks | Other |
   |---|---|---|---|---|
-  | 0.305 м | 4096×4096 | 154 | **114** | техника 15, бассейны 10, малая техника 9, гавани 3, суда 2, стадион 1 |
-  | 1 м | 1250×1250 | 112 | 104 | техника 6, суда 2 |
-  | 2 м | 625×625 | 115 | **113** | суда 2 |
-  | 5 м | 250×250 | 68 | 66 | суда 2 |
-  | 10 м | 125×125 | 10 | 5 | «суда» 5 |
+  | 0.305 m | 4096×4096 | 154 | **114** | vehicles 15, pools 10, small vehicles 9, harbours 3, ships 2, stadium 1 |
+  | 1 m | 1250×1250 | 112 | 104 | vehicles 6, ships 2 |
+  | 2 m | 625×625 | 115 | **113** | ships 2 |
+  | 5 m | 250×250 | 68 | 66 | ships 2 |
+  | 10 m | 125×125 | 10 | 5 | "ships" 5 |
 
-  Крупные объекты живут дольше мелких: резервуары сохраняются до 2 м почти полностью (113 из 114),
-  при 5 м остаётся 58%. Мелкая и средняя техника исчезает раньше всего — бассейны и малая техника
-  уже на 1 м, грузовики к 2 м. При 10 м остаются единицы, и они в основном ложные: пять «судов»
-  там, где их два.
-- **Проверка на отечественной территории.** Снимок Sentinel-2 L2A над Атырау (S2B, 14.09.2026,
-  облачность 0.0%, 10 м/px, окно 20.5 км: город, Урал, порт, нефтяная инфраструктура) обработан
-  тем же конвейером: 9 тайлов, 4.9 с, **3 обнаружения** — стадион (0.46), мост через Урал (0.30)
-  и «гавань» 701×239 м с уверенностью 0.29 на кромке пруда-испарителя, то есть ложная. Ни одного
-  резервуара, ни одного судна. Комплекс сам предупредил: «разрешение 10.003 м/px грубее 2.0 м/px».
-  Вывод для заказчика: **Sentinel-2 для этой задачи непригоден, а съёмки класса 1–2 м для контроля
-  инфраструктуры достаточно** — по замеру выше резервуары на 2 м сохраняются полностью. Оговорка:
-  вывод получен огрублением снимка Дурбана, прогона на снимках KazEOSat-1 у нас не было; мы говорим
-  о требуемом классе разрешения, а не о проверенном аппарате.
-- **Самолёты и разрешение.** Огрубление демо-аэродрома двумя моделями с порогом 0.25: тип
-  определяется у 4 бортов на 0.3 м, у 3 на 1 м и у одного на 2 м; сам факт «здесь самолёт»
-  держится до 3–5 м; на 10 м не находится ничего. Для сверки с реестром по типам нужна съёмка
-  порядка 1 м, а на Sentinel-2 самолёты не наблюдаются вовсе — истребитель там занимает два
-  пикселя. Оценка оптимистичная: пять гражданских бортов крупнее истребителей, огрубление
-  искусственное.
-- **Работа над найденной слабостью.** В обучение добавлена аугментация гауссовым шумом
-  (`train.py --noise`), после чего обучены ещё две модели. Итог четырёх прогонов на тесте MAR20:
+  Large objects survive longer than small ones: storage tanks are kept almost completely up to 2 m
+  (113 of 114), and 58% remain at 5 m. Small and medium vehicles disappear first: pools and small
+  vehicles already at 1 m, trucks by 2 m. At 10 m only a handful remain, mostly false: five "ships"
+  where there are two.
+- **A run on Kazakhstan territory.** A Sentinel-2 L2A image over Atyrau (S2B, 2026-09-14, 0.0% cloud,
+  10 m/px, a 20.5 km window: city, the Ural river, port, oil infrastructure) went through the same
+  pipeline: 9 tiles, 4.9 s, **3 detections**: a stadium (0.46), a bridge over the Ural (0.30) and a
+  701×239 m "harbour" at 0.29 on the edge of an evaporation pond, i.e. a false one. No storage tanks, no
+  ships. The system warned on its own: "resolution 10.003 m/px is coarser than 2.0 m/px". The conclusion
+  for a customer: **Sentinel-2 is unsuitable for this task, while 1–2 m imagery is enough to monitor
+  infrastructure**; per the table above, storage tanks survive at 2 m almost completely. Caveat: this is
+  derived from degraded Durban imagery; we never ran KazEOSat-1 data, so it is a statement about the
+  required resolution class, not a tested satellite.
+- **Aircraft and resolution.** Degrading the demo airfield with two models at a threshold of 0.25: the
+  type is determined for 4 aircraft at 0.3 m, 3 at 1 m and one at 2 m; the plain fact "there is an aircraft
+  here" holds up to 3–5 m; at 10 m nothing is found. Registry reconciliation by type needs ~1 m imagery,
+  and on Sentinel-2 aircraft are not observable at all: a fighter there covers two pixels. The estimate
+  is optimistic: five civilian aircraft larger than fighters, and artificial degradation.
+- **Working on the weakness found.** Gaussian noise augmentation was added to training
+  (`train.py --noise`), and two more models were trained. All four runs on the MAR20 test set:
 
-  | Архитектура | Шум | mAP50 | mAP50-95 | Инференс |
+  | Architecture | Noise | mAP50 | mAP50-95 | Inference |
   |---|---|---|---|---|
-  | yolo11s | нет | 0.899 | 0.786 | **15.7 мс** |
-  | yolo11s | да | 0.898 | 0.784 | 18.3 мс |
-  | yolo11m | нет | 0.904 | 0.795 | 43.7 мс |
-  | yolo11m | да | **0.915** | **0.804** | 40.4 мс |
+  | yolo11s | no | 0.899 | 0.786 | **15.7 ms** |
+  | yolo11s | yes | 0.898 | 0.784 | 18.3 ms |
+  | yolo11m | no | 0.904 | 0.795 | 43.7 ms |
+  | yolo11m | yes | **0.915** | **0.804** | 40.4 ms |
 
-  Аугментация шумом дала прирост большой модели (+0.011 mAP50) и не изменила среднюю метрику малой.
-  Лучшая точность — у yolo11m с шумом, но она в 2.6 раза медленнее, поэтому для просмотра
-  тысяч км² пропускная способность важнее 1.6% mAP50.
+  Noise augmentation improved the large model (+0.011 mAP50) and did not change the mean metric of the
+  small one. The best accuracy belongs to yolo11m with noise, but it is 2.6× slower; for scanning
+  thousands of km² throughput matters more than 1.6% mAP50.
 
-  **Обвал от шума устранён, и установлено, чем именно.** Тот же протокол устойчивости прогнан на
-  трёх моделях, что разделяет два фактора, менявшихся одновременно, — размер модели и аугментацию:
+  **The collapse under noise is fixed, and we know what fixed it.** The same robustness protocol was run
+  on three models, separating the two factors that had changed together, model size and augmentation:
 
-  | Воздействие | s без шума | s с шумом | m с шумом |
+  | Degradation | s, no noise | s, with noise | m, with noise |
   |---|---|---|---|
-  | оригинал | 0.900 | 0.900 | 0.923 |
-  | шум σ=15 | 0.371 (−58.8%) | **0.900 (−0.1%)** | 0.918 (−0.5%) |
-  | шум σ=30 | 0.063 (−93.0%) | **0.890 (−1.2%)** | 0.906 (−1.9%) |
+  | original | 0.900 | 0.900 | 0.923 |
+  | noise σ=15 | 0.371 (−58.8%) | **0.900 (−0.1%)** | 0.918 (−0.5%) |
+  | noise σ=30 | 0.063 (−93.0%) | **0.890 (−1.2%)** | 0.906 (−1.9%) |
 
-  Отвечает аугментация: та же архитектура, та же скорость — и обвала нет. Размер модели даёт
-  только уровень точности (+0.023 mAP50) и к устойчивости против шума отношения не имеет.
+  Augmentation is responsible: same architecture, same speed, and no collapse. Model size only sets the
+  accuracy level (+0.023 mAP50) and has nothing to do with noise robustness.
 
-  **Проверка на реальной сцене уточнила решение.** На чистом снимке модель, обученная с шумом,
-  заметно осторожнее: на демо-аэродроме при рабочем пороге карты conf ≥ 0.4 она показывает три
-  объекта против четырёх у базовой (уверенности 0.78/0.67/0.48/0.34/0.33 против 0.83/0.83/0.67/0.55,
-  результат воспроизведён в двух независимых прогонах). Средняя метрика этого не видит: mAP50
-  усредняет по всем порогам, а оператор работает на одном конкретном. Поэтому по умолчанию в
-  комплексе остаётся yolo11s без шума, модель с шумом подключается одной переменной окружения как
-  режим для зашумлённых снимков, а yolo11m с шумом — как режим архивной обработки.
+  **A check on a real scene refined the decision.** On a clean image the noise-trained model is noticeably
+  more cautious: on the demo airfield at the working map threshold conf ≥ 0.4 it shows three objects
+  against four for the baseline (confidences 0.78/0.67/0.48/0.34/0.33 vs 0.83/0.83/0.67/0.55, reproduced
+  in two independent runs). The mean metric cannot see this: mAP50 averages over all thresholds, while
+  the operator works at one. So the default remains yolo11s without noise; the noise-trained model is
+  switched on with one environment variable for noisy imagery, and yolo11m with noise is the
+  archive-processing mode.
 
-  Цикл «замер → гипотеза → изменение обучения → повторный замер → проверка на реальных данных»
-  пройден полностью и подтверждён числами ([docs/training/robustness.md](training/robustness.md)).
-- Графики обучения, PR-кривая и матрица ошибок — в [docs/training](training).
+  The full "measure -> hypothesis -> change training -> re-measure -> check on real data" loop was
+  completed and is backed by numbers ([docs/training/robustness.md](training/robustness.md)).
+- Training curves, the PR curve and the confusion matrix are in [docs/training](training).
 
-## 8. Ограничения
+## 8. Limitations
 
-1. **Специализированная модель обучена только на военных типах, гражданских классов в MAR20 нет.**
-   На демо-аэродроме King Shaka — гражданском международном аэропорту Дурбана — все четыре борта
-   получили военные типы (E-8, C-17 ×2, C-5), то есть точность по типу там 1/7 = 0.143 при
-   точности по наличию объекта 5/7 = 0.714. Сверка габаритов помечает три борта из четырёх:
-   два как неподтверждённые (49.0% и 48.6%) и один как пограничный (24.7%). Четвёртый, E-8,
-   сходится с паспортом на 6.8% и проверку проходит — по габаритам он неотличим от гражданского
-   широкофюзеляжного борта. Комплекс предназначен
-   для военных аэродромов; на гражданских выводы по типу недостоверны, и это видно оператору
-   по метке модели и по вердикту геометрии.
-2. Открытых снимков Казахстана с разрешением до 1 м не существует: у Maxar Open Data нет событий по
-   стране, в OpenAerialMap по ключевым аэродромам и портам нет ни одной съёмки. Демонстрация
-   выполнена на открытых снимках Дурбана; комплекс не зависит от источника и примет любой GeoTIFF.
-3. При склейке дублей приоритет отдаётся боксу, не обрезанному краем тайла, а не более уверенному.
-4. Оценка на демо-сценах визуальная: эталонной разметки для них нет. Проверял один оператор —
-   201 объект за 13 минут 50 секунд, около 4 секунд на объект. Это контроль на экране, а не
-   экспертиза: аттестованных дешифровщиков в команде нет. Величина характеризует точность,
-   полнота по этим сценам пока неизвестна. Инструмент для её измерения есть: оператор отмечает
-   пропущенные моделью объекты на карте, полнота считается по классам при порогах 0.25 и 0.4.
-   Разметку пропусков должен делать человек, иначе оценка не будет независимой.
-5. Проверка габаритами покрывает только 20 типов самолётов MAR20: из 201 обнаружения демо-сцен
-   эталон применим к 4. Для классов DOTA (суда, резервуары, техника) таблицы паспортных размеров
-   нет, и вердикт остаётся «не проверялось».
-6. **Данные демонстрации некоммерческие.** MAR20 и Maxar Open Data распространяются по лицензиям
-   CC BY-NC. Для пилотного внедрения нужен лицензированный набор снимков и коммерчески допустимый
-   датасет для дообучения — это условие входа, а не формальность.
-7. Мелкие объекты выходят с низкой уверенностью: все 9 обнаружений класса small vehicle на
-   демо-сценах имеют 0.25–0.35 и при штатном пороге карты 0.4 не отображаются. Для просмотра
-   наземной техники порог опускается до 0.25 ценой роста ложных срабатываний.
+1. **The specialised model is trained only on military types; MAR20 has no civilian classes.** At the
+   King Shaka demo airfield, Durban's civilian international airport, all four aircraft got military
+   types (E-8, C-17 ×2, C-5), so type accuracy there is 1/7 = 0.143 against an object-presence accuracy
+   of 5/7 = 0.714. The size check flags three of the four: two as not confirmed (49.0% and 48.6%) and one
+   as borderline (24.7%). The fourth, the E-8, matches its reference within 6.8% and passes: by size it is
+   indistinguishable from a civilian wide-body. The system is meant for military airfields; on civilian
+   ones its type output is unreliable, and the operator sees this from the model tag and the size
+   verdict.
+2. Open imagery of Kazakhstan at 1 m or better does not exist: Maxar Open Data has no events in the
+   country, and OpenAerialMap has no captures of key airfields or ports. The demo uses open Durban
+   imagery; the system does not depend on the source and accepts any GeoTIFF.
+3. When merging duplicates, the box not truncated by a tile edge wins over the more confident one.
+4. Evaluation on the demo scenes is visual: there are no reference labels for them. One operator did the
+   review, 201 objects in 13 minutes 50 seconds, about 4 seconds per object. This is on-screen
+   verification, not expert assessment. The number measures precision; recall on these scenes is still
+   unknown. The tool to measure it exists: the operator marks objects missed by the model on the map,
+   and recall is computed per class at thresholds 0.25 and 0.4. Misses should be marked by a person,
+   otherwise the estimate is not independent.
+5. The size check covers only the 20 MAR20 aircraft types: of the 201 demo detections, a reference
+   applies to 4. For the DOTA classes (ships, storage tanks, vehicles) there is no reference table, and the
+   verdict stays "not checked".
+6. **The demo data is non-commercial.** MAR20 and Maxar Open Data are licensed CC BY-NC. A pilot
+   deployment needs licensed imagery and a commercially usable fine-tuning dataset; this is a
+   precondition, not a formality.
+7. Small objects come out with low confidence: all 9 small-vehicle detections on the demo scenes are at
+   0.25–0.35 and are not shown at the default map threshold of 0.4. To review ground vehicles, the
+   threshold is lowered to 0.25 at the cost of more false positives.
 
-## 9. Рекомендации по развитию и интеграции
+## 9. Recommendations for development and integration
 
-- **Расширение перечня объектов:** новая специализированная модель добавляется в реестр без
-  переобучения общей. Первые кандидаты — типы судов и наземной техники.
-- **Совершенствование моделей:** замкнутый цикл «обнаружение → визуальная проверка оператором →
-  выгрузка датасета → дообучение» уже работает; накопление проверенных сцен региона даёт рост
-  точности без новых источников данных.
-- **Расширение физической проверки:** таблица паспортных габаритов сейчас закрывает 20 типов
-  самолётов. Тот же приём применим к судам (длина корпуса), резервуарам (диаметр) и наземной
-  технике — это даёт независимый от нейросети контроль там, где известен масштаб снимка.
-- **Порог карты по умолчанию.** По данным проверки находки с уверенностью 0.25–0.4 точны на 80%
-  (36 подтверждено, 9 отклонено), а порог 0.4 прячет от оператора эти 36 настоящих объектов.
-  Когда каждую находку проверяет человек, порог разумно снизить до 0.25–0.3.
-- **Сверка с реестром техники** (`detector/inventory.py`, `POST /api/scenes/{id}/inventory`):
-  прототип сравнивает обнаруженные самолёты с тем, что числится на аэродроме, с учётом сверки
-  габаритов, покрытия аэродрома снимком и разрешения. Реестр передаётся в запросе и не хранится —
-  он остаётся в контуре заказчика. Для реального применения классификатор дообучается на типах
-  заказчика: многих распространённых типов в MAR20 нет, и сверка по ним честно даёт «не распознаёт».
-- **Интеграция с платформой КС ДЗЗ:** синхронный `POST /api/detect` принимает снимок и возвращает
-  GeoJSON; каталог обнаружений доступен через `GET /api/detections` с фильтрами по классу, модели,
-  уверенности, статусу проверки и территории.
-- **Закрытый контур:** отключение внешних подложек, размещение комплекса на защищённом сервере,
-  веса хранятся локально.
-- **Масштабирование:** тайлы обрабатываются независимо, поэтому комплекс масштабируется по числу
-  GPU; очередь сцен выносится в отдельный сервис без изменения остального кода.
+- **More object types:** a new specialised model is added to the registry without retraining the
+  general one. First candidates: ship types and ground vehicles.
+- **Model improvement:** the closed loop "detection -> operator review -> dataset export -> fine-tuning"
+  already works; accumulating reviewed regional scenes improves accuracy without new data sources.
+- **Extending the physical check:** the reference table currently covers 20 aircraft types. The same idea
+  applies to ships (hull length), storage tanks (diameter) and ground vehicles, giving a
+  network-independent check wherever the image scale is known.
+- **Default map threshold.** According to the review, detections at confidence 0.25–0.4 are 80% precise
+  (36 confirmed, 9 rejected), and the 0.4 threshold hides those 36 real objects from the operator. When a
+  person reviews every detection, lowering the threshold to 0.25–0.3 is reasonable.
+- **Registry reconciliation** (`detector/inventory.py`, `POST /api/scenes/{id}/inventory`): the prototype
+  compares detected aircraft with what is listed at an airfield, taking into account the size check,
+  airfield coverage by the image and resolution. The registry is passed in the request and never stored,
+  so it stays inside the customer's network. For real use the classifier is fine-tuned on the customer's
+  types: many common types are absent from MAR20, and reconciliation honestly reports them as "not
+  recognised".
+- **Integration with a remote sensing platform:** the synchronous `POST /api/detect` accepts an image and
+  returns GeoJSON; the detection catalogue is available via `GET /api/detections` with filters by class,
+  model, confidence, review status and area.
+- **Isolated networks:** disable external basemaps, host the system on a secured server, keep the weights
+  local.
+- **Scaling:** tiles are processed independently, so the system scales with the number of GPUs; the scene
+  queue can be moved into a separate service without changing the rest of the code.

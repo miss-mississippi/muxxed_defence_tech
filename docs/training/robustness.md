@@ -1,121 +1,119 @@
-# Устойчивость к качеству исходного снимка
+# Robustness to source image quality
 
-`mar20_s_800.pt` · тест MAR20, 400 снимков · imgsz 800 · Tesla T4 · `scripts/robustness.py`
+`mar20_s_800.pt` · MAR20 test, 400 images · imgsz 800 · Tesla T4 · `scripts/robustness.py`
 
-Каждая строка — та же выборка, обработанная соответствующим воздействием. Разметка не меняется,
-меняется только изображение.
+Every row is the same subset with one degradation applied. Labels stay the same; only the image changes.
 
-| Воздействие | mAP50 | mAP50-95 | Потеря mAP50 |
+| Degradation | mAP50 | mAP50-95 | mAP50 change |
 |---|---|---|---|
-| оригинал | 0.900 | 0.781 | — |
-| шум σ=15 | 0.371 | 0.300 | −58.8% |
-| шум σ=30 | 0.063 | 0.050 | −93.0% |
-| смаз 5 px | 0.901 | 0.783 | +0.1% |
-| смаз 9 px | 0.893 | 0.776 | −0.8% |
+| original | 0.900 | 0.781 | — |
+| noise σ=15 | 0.371 | 0.300 | −58.8% |
+| noise σ=30 | 0.063 | 0.050 | −93.0% |
+| blur 5 px | 0.901 | 0.783 | +0.1% |
+| blur 9 px | 0.893 | 0.776 | −0.8% |
 | JPEG q=30 | 0.866 | 0.748 | −3.8% |
-| разрешение ÷2 | 0.901 | 0.783 | +0.1% |
-| разрешение ÷4 | 0.857 | 0.741 | −4.8% |
-| яркость ×0.5 | 0.889 | 0.770 | −1.2% |
-| дымка 30% | 0.901 | 0.780 | +0.1% |
+| resolution ÷2 | 0.901 | 0.783 | +0.1% |
+| resolution ÷4 | 0.857 | 0.741 | −4.8% |
+| brightness ×0.5 | 0.889 | 0.770 | −1.2% |
+| haze 30% | 0.901 | 0.780 | +0.1% |
 
-## После лечения: yolo11m, обученная с аугментацией шумом
+## After the fix: yolo11m trained with noise augmentation
 
-`weights/mar20_m_800_noise.pt` (в выходе Kaggle тот же файл лежит под именем
-`mar20_s_800_noise2.pt` — имя прогона осталось от `s`, архитектура там **m**, обучена с
-`GaussNoise(p=0.5)`), тот же протокол: тест MAR20, 400 снимков, imgsz 800, T4.
+`weights/mar20_m_800_noise.pt` (in the Kaggle output the same file is named `mar20_s_800_noise2.pt`:
+the run name is left over from `s`, but the architecture is **m**, trained with `GaussNoise(p=0.5)`),
+same protocol: MAR20 test, 400 images, imgsz 800, T4.
 
-| Воздействие | mAP50 | mAP50-95 | Потеря mAP50 |
+| Degradation | mAP50 | mAP50-95 | mAP50 change |
 |---|---|---|---|
-| оригинал | 0.923 | 0.802 | — |
-| **шум σ=15** | **0.918** | 0.800 | **−0.5%** |
-| **шум σ=30** | **0.906** | 0.786 | **−1.9%** |
-| смаз 5 px | 0.919 | 0.801 | −0.4% |
-| смаз 9 px | 0.901 | 0.787 | −2.4% |
+| original | 0.923 | 0.802 | — |
+| **noise σ=15** | **0.918** | 0.800 | **−0.5%** |
+| **noise σ=30** | **0.906** | 0.786 | **−1.9%** |
+| blur 5 px | 0.919 | 0.801 | −0.4% |
+| blur 9 px | 0.901 | 0.787 | −2.4% |
 | JPEG q=30 | 0.917 | 0.797 | −0.7% |
-| разрешение ÷2 | 0.919 | 0.800 | −0.4% |
-| разрешение ÷4 | 0.883 | 0.770 | −4.4% |
-| яркость ×0.5 | 0.927 | 0.807 | +0.4% |
-| дымка 30% | 0.911 | 0.792 | −1.3% |
+| resolution ÷2 | 0.919 | 0.800 | −0.4% |
+| resolution ÷4 | 0.883 | 0.770 | −4.4% |
+| brightness ×0.5 | 0.927 | 0.807 | +0.4% |
+| haze 30% | 0.911 | 0.792 | −1.3% |
 
-### Было и стало
+### Before and after
 
-| Воздействие | было (s без шума) | стало (m с шумом) |
+| Degradation | before (s, no noise) | after (m, with noise) |
 |---|---|---|
-| шум σ=15 | 0.371 (−58.8%) | **0.918 (−0.5%)** |
-| шум σ=30 | 0.063 (−93.0%) | **0.906 (−1.9%)** |
+| noise σ=15 | 0.371 (−58.8%) | **0.918 (−0.5%)** |
+| noise σ=30 | 0.063 (−93.0%) | **0.906 (−1.9%)** |
 
-**Обвал от шума устранён.** Модель, которая теряла 93% точности на сильно зашумлённом снимке,
-теперь теряет 2%. Остальные воздействия тоже стали переноситься ровнее, худшее из них —
-четырёхкратное падение разрешения, −4.4%.
+**The collapse under noise is gone.** A model that lost 93% of its accuracy on a heavily noisy image now
+loses 2%. The other degradations are handled more evenly too; the worst is a fourfold drop in
+resolution, −4.4%.
 
-## Что именно дало эффект: аугментация, а не архитектура
+## What made the difference: augmentation, not architecture
 
-Между первыми двумя таблицами изменились два фактора сразу — архитектура (`s`→`m`) и аугментация
-(нет→есть). Чтобы отделить одно от другого, тот же протокол прогнан на `s`, обученной с шумом
-(`mar20_s_800_noise.pt`, `notebook3001f762df`, замер — `notebooks/kaggle_robustness.ipynb`).
+Two factors changed between the first two tables: architecture (`s` -> `m`) and augmentation
+(none -> noise). To separate them, the same protocol was run on `s` trained with noise
+(`mar20_s_800_noise.pt`, measured with `notebooks/kaggle_robustness.ipynb`).
 
-| Воздействие | mAP50 | mAP50-95 | P | R | Потеря mAP50 |
+| Degradation | mAP50 | mAP50-95 | P | R | mAP50 change |
 |---|---|---|---|---|---|
-| оригинал | 0.900 | 0.783 | 0.831 | 0.849 | — |
-| **шум σ=15** | **0.900** | 0.778 | 0.861 | 0.823 | **−0.1%** |
-| **шум σ=30** | **0.890** | 0.769 | 0.838 | 0.827 | **−1.2%** |
-| смаз 5 px | 0.899 | 0.782 | 0.849 | 0.833 | −0.2% |
-| смаз 9 px | 0.881 | 0.768 | 0.812 | 0.820 | −2.1% |
+| original | 0.900 | 0.783 | 0.831 | 0.849 | — |
+| **noise σ=15** | **0.900** | 0.778 | 0.861 | 0.823 | **−0.1%** |
+| **noise σ=30** | **0.890** | 0.769 | 0.838 | 0.827 | **−1.2%** |
+| blur 5 px | 0.899 | 0.782 | 0.849 | 0.833 | −0.2% |
+| blur 9 px | 0.881 | 0.768 | 0.812 | 0.820 | −2.1% |
 | JPEG q=30 | 0.896 | 0.778 | 0.827 | 0.839 | −0.5% |
-| разрешение ÷2 | 0.898 | 0.780 | 0.861 | 0.816 | −0.3% |
-| разрешение ÷4 | 0.864 | 0.750 | 0.774 | 0.800 | −4.1% |
-| яркость ×0.5 | 0.894 | 0.774 | 0.864 | 0.796 | −0.7% |
-| дымка 30% | 0.894 | 0.777 | 0.847 | 0.818 | −0.7% |
+| resolution ÷2 | 0.898 | 0.780 | 0.861 | 0.816 | −0.3% |
+| resolution ÷4 | 0.864 | 0.750 | 0.774 | 0.800 | −4.1% |
+| brightness ×0.5 | 0.894 | 0.774 | 0.864 | 0.796 | −0.7% |
+| haze 30% | 0.894 | 0.777 | 0.847 | 0.818 | −0.7% |
 
-### Три модели рядом
+### Three models side by side
 
-| Воздействие | s без шума | **s с шумом** | m с шумом |
+| Degradation | s, no noise | **s, with noise** | m, with noise |
 |---|---|---|---|
-| оригинал | 0.900 | 0.900 | 0.923 |
-| шум σ=15 | 0.371 (−58.8%) | **0.900 (−0.1%)** | 0.918 (−0.5%) |
-| шум σ=30 | 0.063 (−93.0%) | **0.890 (−1.2%)** | 0.906 (−1.9%) |
+| original | 0.900 | 0.900 | 0.923 |
+| noise σ=15 | 0.371 (−58.8%) | **0.900 (−0.1%)** | 0.918 (−0.5%) |
+| noise σ=30 | 0.063 (−93.0%) | **0.890 (−1.2%)** | 0.906 (−1.9%) |
 
-**Ответ: дело в аугментации.** Та же архитектура `s`, то же качество на чистом тесте (0.900 против
-0.900), та же скорость — но обвала от шума больше нет. Смена архитектуры отвечает только за уровень
-точности (+0.023 mAP50 на чистом тесте) и чуть лучше держит σ=30; к устойчивости против шума она
-отношения не имеет.
+**Answer: it is the augmentation.** Same `s` architecture, same clean-test quality (0.900 vs 0.900),
+same speed, and no collapse under noise. The architecture change only sets the accuracy level
+(+0.023 mAP50 on the clean test) and holds σ=30 slightly better; it has nothing to do with noise
+robustness.
 
-## Что из этого следует
+## What follows
 
-**Модель устойчива** к смазу, JPEG-сжатию, двукратному падению разрешения, слабой освещённости
-и тонкой дымке: потери в пределах 5%, а местами их нет вовсе. Для практики это означает, что
-комплекс переживает съёмку под облачной дымкой, пересжатые архивные снимки и данные с более
-грубого сенсора.
+**The model is robust** to blur, JPEG compression, halved resolution, low light and thin haze: losses
+stay within 5%, and in places there are none. In practice the system survives imagery taken through
+haze, recompressed archive images and data from a coarser sensor.
 
-**Базовая модель уязвима к сенсорному шуму.** При σ=15 mAP50 падает с 0.900 до 0.371, при σ=30 —
-до 0.063. Причина в обучении: в аугментациях были отражения, мозаика и цветовые сдвиги, но не было
-шума, поэтому зашумлённый снимок для модели выглядит незнакомо.
+**The baseline model is vulnerable to sensor noise.** At σ=15 mAP50 drops from 0.900 to 0.371, at
+σ=30 to 0.063. The cause is training: the augmentations had flips, mosaic and colour shifts but no
+noise, so a noisy image looks unfamiliar to the model.
 
-**Что сделано:** аугментация гауссовым шумом добавлена в обучение (`scripts/train.py --noise 0.5`,
-штатный параметр `augmentations` ultralytics). Замеры выше показывают, что её достаточно: `s`
-с шумом держит σ=15 без потерь, оставаясь той же моделью по размеру и скорости.
+**What was done:** Gaussian noise augmentation was added to training (`scripts/train.py --noise 0.5`,
+via the standard ultralytics `augmentations` argument). The measurements above show it is enough:
+`s` with noise holds σ=15 without loss while staying the same model in size and speed.
 
-**Что из этого следует для поставки.** Устойчивость не бесплатна, хотя по mAP50 выглядит именно так.
-На чистом тесте MAR20 обе модели дают 0.900 и считают одинаково (та же архитектура, 15.9 мс против
-15.7 мс на T4), но на реальном чистом снимке модель с шумом заметно осторожнее. Демо-аэродром
-Дурбана, один и тот же снимок, два независимых прогона с одинаковым результатом:
+**What this means for the default model.** Robustness is not free, even though mAP50 makes it look so.
+On the clean MAR20 test both models score 0.900 and run at the same speed (same architecture, 15.9 ms
+vs 15.7 ms on a T4), but on a real clean image the noise-trained model is noticeably more cautious.
+Durban demo airfield, the same image, two independent runs with the same result:
 
-| Модель | Уверенности MAR20 | При conf ≥ 0.4 |
+| Model | MAR20 confidences | At conf ≥ 0.4 |
 |---|---|---|
-| `s` без шума | 0.83, 0.83, 0.67, 0.55 | **4 объекта** |
-| `s` с шумом | 0.78, 0.67, 0.48, 0.34, 0.33 | **3 объекта** |
+| `s` without noise | 0.83, 0.83, 0.67, 0.55 | **4 objects** |
+| `s` with noise | 0.78, 0.67, 0.48, 0.34, 0.33 | **3 objects** |
 
-mAP50 этого не показывает: он усредняет по всем порогам, а оператор видит карту на конкретном
-пороге 0.4. Шумовая аугментация делает модель консервативнее на чистых данных — часть объектов
-уезжает под порог.
+mAP50 does not show this: it averages over all thresholds, while the operator sees the map at one
+threshold, 0.4. Noise augmentation makes the model more conservative on clean data, and some objects
+slip under the threshold.
 
-**Поэтому по умолчанию остаётся `s` без шума:** чистый снимок — штатный случай, и на нём она
-показывает оператору больше. `s` с шумом — режим для зашумлённых снимков: та же скорость,
-но σ=15 без потерь вместо обвала до 0.371.
+**So `s` without noise stays the default:** a clean image is the normal case, and there it shows the
+operator more. `s` with noise is the mode for noisy imagery: same speed, but no loss at σ=15 instead
+of a collapse to 0.371.
 
-`m` с шумом (`weights/mar20_m_800_noise.pt`, в git не входит) остаётся режимом архивной обработки:
-она покупает +0.023 mAP50 на чистом тесте и чуть лучший σ=30 ценой +40% времени сцены
-(19.0 с против 13.4 с на демо-сцене при двух моделях).
+`m` with noise (`weights/mar20_m_800_noise.pt`, not in git) remains the archive-processing mode: it buys
++0.023 mAP50 on the clean test and a slightly better σ=30 for +40% scene time (19.0 s vs 13.4 s on the
+demo scene with two models).
 
-Базовое значение 0.900 на подвыборке из 400 снимков совпадает с 0.899 на полном тесте из 2511 —
-подвыборка репрезентативна.
+The 0.900 baseline on the 400-image subset matches 0.899 on the full 2511-image test set, so the subset
+is representative.

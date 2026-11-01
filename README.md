@@ -1,213 +1,354 @@
-# Идентификация объектов на космических снимках (NU STeP x Defense Tech Challenge)
+# Satellite Object Identification
 
-Прототип по ТЗ №3 Центра военно-космических программ МО РК: автоматизированное
-выявление, распознавание и классификация объектов на космических снимках
-с применением ИИ. Плюс минимальный REST API и каталог обнаружений (часть ТЗ №4) —
-чтобы показать интеграцию с цифровой платформой ДЗЗ.
+**Detect, classify and georeference objects in satellite imagery, then check the classifier with physics.**
 
-Детектор — YOLO11-OBB (ориентированные боксы): самолёты и корабли стоят под
-углом и плотно, горизонтальные боксы их слепляют.
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![YOLO11-OBB](https://img.shields.io/badge/model-YOLO11--OBB-111F68)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-60%20passing-3fb950)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 
-## Что умеет
+A working prototype built in four days by a team of two for the **NU STeP × Defense Tech Challenge**
+(Astana, September 2026), Task 3: automated detection, recognition and classification of objects in
+satellite imagery, set by the Military Space Programmes Centre of the Ministry of Defence of Kazakhstan.
+The project was selected as a finalist for Demo Day.
 
+![Operator map on the King Shaka airport scene](docs/images/map_airfield.jpg)
+
+<sub>The operator map on a real WorldView scene of King Shaka airport, Durban. The type model called this
+aircraft a C-17 with 0.83 confidence. The size check measured it at 28.2 × 26.4 m against a reference
+of 53.0 × 51.8 m and flagged the type as not confirmed (⚠). The operator kept the object and relabelled it
+`plane`. Imagery © Maxar Technologies, Maxar Open Data Program (CC BY-NC 4.0); basemap © Esri.</sub>
+
+## Highlights
+
+- **0.899 mAP50 on the official MAR20 test set** (20 military aircraft types, 2511 images) after
+  25 minutes of transfer learning from DOTA weights; 15.7 ms per image on a T4.
+- **A physical check on the classifier.** Every detection is georeferenced, so its size is known in
+  metres. Comparing it with the reference dimensions of the predicted type catches confident mistakes
+  the network cannot see: a "C-17" at 0.83 confidence measured 28 m long, while a real C-17 is 53 m.
+- **A weakness found, fixed and attributed.** Robustness tests showed sensor noise collapsing mAP50
+  from 0.900 to 0.063. Noise augmentation brought it back to 0.890, and a controlled run on three
+  models showed that the augmentation, not the model size, was responsible. A check on a real scene
+  then kept the noise-free model as the default: it shows the operator 4 aircraft where the
+  noise-trained one shows 3.
+- **Honest evaluation on real imagery.** Every one of the 201 detections on three Maxar scenes was
+  reviewed: 94.0% are real objects and 92.0% have the right class. On a civilian airport only 1 of 7
+  aircraft got a correct type, because MAR20 has no civilian classes, and we report that number too.
+- **Measured resolution limits.** Storage tanks survive degradation to 2 m/px (113 of 114), aircraft
+  types hold to about 1 m/px, and nothing is left at Sentinel-2's 10 m/px. The 10 m case was confirmed
+  on a real Sentinel-2 scene over Atyrau, Kazakhstan.
+- **A complete system, not a notebook.** Tiling of arbitrarily large GeoTIFFs, cross-tile merging, WGS84
+  output, an SQLite catalogue, a REST API, a Leaflet map with keyboard review, HTML reports, recall
+  measurement, reconciliation with an equipment registry, and export of reviewed detections back into a
+  training set. 60 automated tests.
+- **About 3600 km²/h on a laptop** (Apple M1, synthetic scene at 0.5 m/px, general model only).
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["GeoTIFF / JPG / PNG<br/>any size, 8-16 bit"] --> B["1024 px tiles<br/>200 px overlap<br/>one stretch per scene"]
+    B --> C["General model<br/>YOLO11-OBB on DOTA<br/>15 classes"]
+    B --> D["Type model<br/>YOLO11-OBB on MAR20<br/>20 aircraft types"]
+    C --> E["Cross-tile merge<br/>IoS, untruncated boxes win"]
+    D --> E
+    E --> F["Types kept only where<br/>the general model agrees"]
+    F --> G["Pixels to CRS to WGS84<br/>size in metres, azimuth"]
+    G --> H["Size check against<br/>reference dimensions"]
+    H --> I[("SQLite catalogue")]
+    I --> J["REST API, GeoJSON"]
+    I --> K["Map and operator review"]
+    K --> L["Reviewed tiles become<br/>a training set"]
 ```
-GeoTIFF / JPG / PNG
-  → тайлы 1024 px с перекрытием, единая растяжка 11/16-бит в 8 бит
-  → YOLO11-OBB на каждом тайле (батчами, CUDA / Apple MPS / CPU)
-  → склейка дублей на стыках тайлов (IoS, приоритет необрезанным боксам)
-  → пиксели → CRS снимка → WGS84: полигон, центр, длина/ширина в метрах, азимут
-  → SQLite-каталог → REST API (GeoJSON) → карта Leaflet
-  → визуальная проверка оператором: подтвердить / отклонить / исправить класс → отчёт
-```
 
-## Быстрый старт
+- **Oriented boxes.** Aircraft on an apron and ships at a berth sit at arbitrary angles and close
+  together. Axis-aligned boxes around them are half background and get merged by NMS; oriented boxes
+  separate them and also give each object's heading.
+- **Two models, one job each.** The general model (DOTA, 15 classes) finds ships, storage tanks,
+  vehicles, harbours and aircraft. The type model (MAR20) names the aircraft type, but its detections
+  survive only where the general model found the same object. Without that rule it "recognised"
+  Tu-95 bombers in port cranes with 0.71 confidence.
+- **Seams handled explicitly.** An object on a tile border is cut off in one tile, so plain IoU misses
+  the duplicate. Duplicates are matched by intersection over the smaller box, and the box not touching a
+  tile edge wins.
+- **One contrast stretch per scene.** 11/16-bit imagery is stretched with one pair of percentiles for the
+  whole scene, so contrast does not jump between tiles; empty tiles are detected from raw values, so dark
+  water is not mistaken for nodata.
+
+## Results
+
+### Aircraft type recognition: MAR20 test set (2511 images, 14,471 objects)
+
+| Model | Noise augmentation | mAP50 | mAP50-95 | Inference (T4) |
+|---|---|---|---|---|
+| **yolo11s** (default) | no | 0.899 | 0.786 | **15.7 ms** |
+| yolo11s | yes | 0.898 | 0.784 | 18.3 ms |
+| yolo11m | no | 0.904 | 0.795 | 43.7 ms |
+| yolo11m | yes | **0.915** | **0.804** | 40.4 ms |
+
+Large distinctive aircraft reach 0.97–0.99 (B-1B 0.990, TU-160 0.988, TU-95 0.978); small look-alike
+fighters are the hard part (F-22 0.589, F-15 0.745). The per-class breakdown is in
+[NOTES.md](NOTES.md#sep-16-fine-tuning-on-mar20), training curves in [docs/training](docs/training).
+
+### Real imagery: operator review of every detection
+
+Three 4096×4096 WorldView scenes of Durban at 0.3 m/px: a container terminal, an oil terminal and an
+airport. One operator reviewed all 201 detections at the catalogue threshold of 0.25.
+
+| What is checked | All scenes | Airport only |
+|---|---|---|
+| the detected object is real | 189/201 = **0.940** | 5/7 = 0.714 |
+| the class or type is correct | 185/201 = **0.920** | 1/7 = **0.143** |
+
+The airport gap is the point of reporting two numbers: King Shaka is a civilian airport, MAR20 knows only
+military types, so every airliner got a military label. One averaged number would have hidden this.
+This is precision only; recall is measured with a separate tool (see [Recall](#recall)).
+
+![Oil terminal scene with detections](docs/images/map_oil_terminal.jpg)
+
+<sub>The oil terminal scene at the default threshold of 0.4: storage tanks, tankers at the berth, trucks
+and swimming pools. Imagery © Maxar Technologies, Maxar Open Data Program (CC BY-NC 4.0); basemap © Esri.</sub>
+
+### Robustness to image quality
+
+400 MAR20 test images, each degradation applied to the same subset:
+
+| Degradation | yolo11s | yolo11s + noise aug. | yolo11m + noise aug. |
+|---|---|---|---|
+| original | 0.900 | 0.900 | 0.923 |
+| Gaussian noise σ=15 | 0.371 (−58.8%) | **0.900 (−0.1%)** | 0.918 (−0.5%) |
+| Gaussian noise σ=30 | 0.063 (−93.0%) | **0.890 (−1.2%)** | 0.906 (−1.9%) |
+
+Blur, JPEG compression, lower resolution (down to ÷4), low light and haze cost the baseline at most
+4.8% mAP50 (relative).
+Noise was the one real weakness; the same architecture trained with noise no longer collapses. Details:
+[docs/training/robustness.md](docs/training/robustness.md).
+
+### Resolution limit
+
+![The same airliner at four resolutions](docs/images/resolution.jpg)
+
+The demo scenes were degraded step by step and run through the same pipeline (one run per resolution):
+
+| Resolution | Storage tanks found (of 114) | Aircraft found | Aircraft with a type |
+|---|---|---|---|
+| 0.3 m | 114 | 6 | 4 |
+| 1 m | 104 | 5 | 3 |
+| 2 m | 113 | 5 | 1 |
+| 5 m | 66 | 4 | 1 (wrong) |
+| 10 m (Sentinel-2) | 5 | 0 | 0 |
+
+A real Sentinel-2 scene over Atyrau, Kazakhstan, agrees: three detections in a 20 km window of an oil
+city with a river port, one of them false, and no storage tanks or ships. The system warns about coarse
+imagery by itself. Extrapolating from the degraded scenes: 1–2 m imagery is enough for infrastructure,
+and aircraft types need about 1 m.
+
+## The size check
+
+Measured dimensions are compared with the reference length and wingspan of the predicted type
+(`detector/physical.py`). There are three verdicts rather than one threshold, because a binary answer
+right at the boundary misleads:
+
+| Deviation from reference | Verdict | Demo airport |
+|---|---|---|
+| up to 15% | size matches | E-8: 6.8% |
+| 15–25% | borderline (≈) | C-17: 24.7% |
+| over 25% | type not confirmed (⚠) | C-17: 49.0%, C-5: 48.6% |
+
+Variable-sweep aircraft (Tu-160, B-1B, Tu-22M, Su-24) are accepted in both wing positions. The check is a
+filter, not proof: the E-8 is built on the Boeing 707 airframe and is indistinguishable by size from a
+civilian wide-body, so it passes. Nothing is deleted; the verdict is stored with the detection, shown on
+the map and in the report, and the decision stays with the operator.
+
+## Quick start
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest tests -q
 
-# один снимок целиком (быстрая проверка)
+# single image: JSON with detections and a picture with boxes
 .venv/bin/python scripts/infer.py samples/boats.jpg
 
-# сцена любого размера → GeoJSON
-.venv/bin/python scripts/detect_scene.py path/to/scene.tif
+# a real scene: download a 4096 px window of Maxar Open Data, then detect
+.venv/bin/python scripts/fetch_demo_scene.py durban_airport
+.venv/bin/python scripts/detect_scene.py data/demo/durban_airport.tif
 
-# сервер: карта http://127.0.0.1:8000, документация API http://127.0.0.1:8000/docs
+# server: map at http://127.0.0.1:8000, API docs at http://127.0.0.1:8000/docs
 .venv/bin/uvicorn api.app:app --host 127.0.0.1 --port 8000
-
-# тесты
-.venv/bin/python -m pytest tests -q
 ```
 
-Веса `yolo11s-obb.pt` скачиваются автоматически в `weights/` при первом запуске.
-Сервер настраивается переменными `WEIGHTS`, `DEVICE` (`cpu`/`mps`/`0`), `CONF`, `DATA_DIR`.
+`yolo11s-obb.pt` (the DOTA model) is downloaded to `weights/` on first run. Other demo presets:
+`durban_port_terminal`, `durban_port_tanks`, `atyrau_s2` (Sentinel-2). The server is configured with
+`WEIGHTS`, `DEVICE` (`cpu` / `mps` / `0`), `CONF` and `DATA_DIR`.
 
-Несколько моделей сразу (общая по DOTA + дообученная по типам техники), порядок задаёт приоритет
-при наложении объектов:
+### Running both models
 
 ```bash
 MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800.pt:refine" .venv/bin/uvicorn api.app:app
 ```
 
-Суффикс `:refine` — модель только уточняет тип там, где объект нашла общая модель. Без него
-модель типов самолётов «узнаёт» их в портовых кранах и контейнерах.
+Order sets priority when two models find the same object. The `:refine` suffix makes a model refine
+types only where the general model found an object. There are three type models, and switching between
+them is one environment variable:
 
-**Режим архивной обработки.** Вместо `mar20_s_800.pt` подключается `mar20_m_800_noise.pt` — та же
-модель типов, но архитектуры `m`, обученная с аугментацией гауссовым шумом:
-
-```bash
-MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_m_800_noise.pt:refine" .venv/bin/uvicorn api.app:app
-```
-
-Режим покупает +0.023 mAP50 на чистом тесте MAR20 (0.923 против 0.900) ценой +40% времени сцены:
-19.0 с против 13.4 с на демо-аэродроме (4096×4096, 25 тайлов, M1/MPS, обе модели). Поэтому по
-умолчанию поставляется `s`.
-
-**Режим для зашумлённых снимков.** Устойчивость к сенсорному шуму даёт не размер модели, а
-аугментация при обучении: `mar20_s_800_noise.pt` — та же `s`, той же скорости, но держит шум
-σ=15 без потерь (0.900) там, где базовая рассыпается до 0.371, а при σ=30 — до 0.063.
-
-```bash
-MODELS="dota=weights/yolo11s-obb.pt,mar20=weights/mar20_s_800_noise.pt:refine" .venv/bin/uvicorn api.app:app
-```
-
-Три модели типов и когда какая нужна:
-
-| Веса | Когда | Цена |
+| Weights | When | Cost |
 |---|---|---|
-| `mar20_s_800.pt` (по умолчанию) | чистый снимок — штатный случай | на шуме σ=30 падает до 0.063 |
-| `mar20_s_800_noise.pt` | снимок зашумлён | на чистом снимке уверенности ниже: при conf ≥ 0.4 показывает 3 объекта там, где базовая 4 |
-| `mar20_m_800_noise.pt` | архив, время не критично | +40% времени сцены за +0.023 mAP50 |
+| `mar20_s_800.pt` (default) | clean imagery, the normal case | drops to 0.063 under heavy noise |
+| `mar20_s_800_noise.pt` | noisy imagery | more cautious on clean images: 3 aircraft above 0.4 where the default shows 4 |
+| `mar20_m_800_noise.pt` | archive processing, time not critical | +40% scene time for +0.023 mAP50 |
 
-Полные таблицы и обоснование — [docs/training/robustness.md](docs/training/robustness.md).
+Fine-tuned weights are not committed (`weights/` is in `.gitignore`). They are reproduced with
+[`notebooks/kaggle_train.ipynb`](notebooks/kaggle_train.ipynb)
+([open in Kaggle](https://www.kaggle.com/kernels/welcome?src=https://github.com/miss-mississippi/muxxed_defence_tech/blob/main/notebooks/kaggle_train.ipynb)):
+`NOISE=0.5` turns on noise augmentation, `MODEL=yolo11m-obb.pt` selects the `m` architecture.
 
-Веса моделей в git не входят (`weights/` в `.gitignore`) и воспроизводятся
-`notebooks/kaggle_train.ipynb`: `NOISE=0.5` включает шумовую аугментацию, `MODEL=yolo11m-obb.pt` —
-архитектуру `m`.
+## Recall
 
-## Полнота
+Precision comes from review, but a missed object never appears in the list, so recall needs its own
+tool. On the map the operator switches to "Mark missed objects", clicks the objects the model missed and
+then confirms that the whole scene was inspected. Recall is computed per class at thresholds 0.25 and
+0.4; until the scene is marked complete it is shown as an upper bound. The review data already shows
+that the 0.4 map threshold is expensive: detections at 0.25–0.4 are 80% precise, and the threshold hides
+36 real objects to avoid showing 9 false ones.
 
-Точность известна из проверки оператором, полнота — нет: пропущенного объекта в списке просто
-нет. Поэтому на карте есть режим «Отметить пропущенное»: оператор кликает по объектам, которых
-модель не нашла, и отмечает, что просмотрел сцену целиком. Полнота считается по классам при
-порогах 0.25 и 0.4; пока сцена не просмотрена целиком, цифры показываются как верхняя оценка.
+## Registry reconciliation
 
-## Сверка с реестром техники
-
-Прототип: обнаруженные самолёты сравниваются с тем, что числится на аэродромах реестра.
-Реестр — аэродромы (полигон GeoJSON в WGS84) и число бортов по типам; формат — в
-[samples/registry_demo.json](samples/registry_demo.json). Это **условный** пример: гражданский
-аэродром Дурбана и выдуманные борта. Настоящий реестр передаётся в запросе и не сохраняется.
+A prototype that compares detected aircraft with what an equipment registry lists for each airfield
+(`detector/inventory.py`). The registry is a list of airfields, each a WGS84 polygon with aircraft
+counts by type. It is passed in the request and never stored. The repository only holds a mock example,
+[`samples/registry_demo.json`](samples/registry_demo.json), with invented aircraft at the civilian Durban
+airport.
 
 ```bash
 .venv/bin/python scripts/check_inventory.py data/demo/durban_airport.tif --registry samples/registry_demo.json
-curl -X POST http://127.0.0.1:8000/api/scenes/7/inventory -H "Content-Type: application/json" --data @samples/registry_demo.json
+curl -X POST "http://127.0.0.1:8000/api/scenes/$SCENE_ID/inventory" -H "Content-Type: application/json" --data @samples/registry_demo.json
 ```
 
-Тип засчитывается, только если ему не противоречат габариты; аэродром вне снимка и типы, которых
-модель не знает, помечаются отдельно; при разрешении грубее 1 м отчёт предупреждает, что сверка
-по типам ненадёжна.
+A type is counted only if the measured size does not contradict it. Without that rule the demo produces
+two wrong answers at once: "C-17: matches" (one of the two cannot physically be a C-17) and a false alarm
+about an unlisted C-5. An airfield outside the image is reported as "cannot reconcile" rather than "all
+aircraft missing", types the model does not know are reported separately, and the report warns when
+the resolution is too coarse for types.
 
 ## REST API
 
-| Метод | Путь | Назначение |
+| Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/scenes` | загрузить снимок, обработка в фоне (202) |
-| GET | `/api/scenes`, `/api/scenes/{id}` | статус, прогресс, метаданные, счётчики по классам |
-| GET | `/api/scenes/{id}/preview.png` | превью сцены (EPSG:3857) для карты |
-| GET | `/api/scenes/{id}/report` | отчёт HTML (печать в PDF) |
-| GET | `/api/detections` | каталог GeoJSON: `scene_id`, `class_name`, `min_conf`, `status`, `bbox` |
-| GET | `/api/detections/{id}` | одно обнаружение |
-| PATCH | `/api/detections/{id}` | визуальная проверка оператором `{status, class_name?, comment?}` |
-| GET | `/api/stats` | сводка по классам и статусам проверки |
-| POST | `/api/detect` | снимок → GeoJSON сразу в ответе, без сохранения (для внешних систем) |
-| POST | `/api/scenes/{id}/inventory` | сверка самолётов сцены с реестром (реестр в теле запроса, не сохраняется) |
-| POST, GET | `/api/scenes/{id}/missed` | отметить пропущенный моделью объект / список отметок |
-| DELETE | `/api/missed/{id}` | удалить отметку пропуска |
-| PUT | `/api/scenes/{id}/completeness` | оператор подтверждает, что отметил все пропуски |
-| GET | `/api/scenes/{id}/recall` | полнота по сцене и классам при порогах 0.25 и 0.4 |
-| GET | `/api/health`, `/api/model` | состояние, классы модели |
+| POST | `/api/scenes` | upload an image; processed in the background (202) |
+| GET | `/api/scenes`, `/api/scenes/{id}` | status, progress, metadata, counts by class |
+| DELETE | `/api/scenes/{id}` | delete a scene with its detections, marks, image and preview |
+| GET | `/api/scenes/{id}/preview.png` | scene preview in EPSG:3857 for the map |
+| GET | `/api/scenes/{id}/report` | HTML report, printable to PDF |
+| GET | `/api/detections` | GeoJSON catalogue, filters: `scene_id`, `class_name`, `model`, `min_conf`, `status`, `size_check`, `bbox` |
+| GET, PATCH | `/api/detections/{id}` | one detection; operator review `{status, class_name?, comment?}` |
+| GET | `/api/stats` | totals by class and review status |
+| POST | `/api/detect` | image in, GeoJSON out, nothing stored (for external systems) |
+| POST | `/api/scenes/{id}/inventory` | reconcile the scene's aircraft with a registry sent in the body |
+| POST, GET | `/api/scenes/{id}/missed` | mark an object the model missed / list marks |
+| DELETE | `/api/missed/{id}` | remove a mark |
+| PUT | `/api/scenes/{id}/completeness` | confirm that all misses are marked |
+| GET | `/api/scenes/{id}/recall` | recall per scene and class at thresholds 0.25 and 0.4 |
+| GET | `/api/health`, `/api/model` | health and model classes |
 
-## Использование из кода
+## Using it from Python
 
 ```python
 from detector import Detector, detect_scene
 
-det = Detector()                                   # weights/yolo11s-obb.pt, imgsz=1024
-dets = det.predict(tile, offset=(x0, y0), rgb=True)  # тайл HxWx3 uint8 → Detection в пикселях сцены
-result = detect_scene(det, "scene.tif")            # вся сцена → SceneResult
-geojson = result.to_geojson()                      # FeatureCollection в WGS84
+det = Detector()                                     # weights/yolo11s-obb.pt, imgsz=1024
+dets = det.predict(tile, offset=(x0, y0), rgb=True)  # HxWx3 uint8 tile -> detections in scene pixels
+result = detect_scene(det, "scene.tif")              # whole scene -> SceneResult
+geojson = result.to_geojson()                        # FeatureCollection in WGS84
 ```
 
-Формат детекции и конвенция координат — `detector/schema.py`.
+The detection format and the coordinate convention are documented in `detector/schema.py`.
 
-## Обучение и оценка
+## Training and evaluation
 
 ```bash
-# MAR20 (военные самолёты, 20 типов) → формат YOLO-OBB
+# MAR20 (military aircraft, 20 types) -> YOLO-OBB format
 .venv/bin/python scripts/prepare_mar20.py --src /path/to/MAR20 --out data/mar20_yolo
 
-# дообучение с весов DOTA; лучшие веса → weights/<name>.pt, метрики → outputs/eval/
+# fine-tune from the DOTA weights; best weights -> weights/<name>.pt, metrics -> outputs/eval/
 .venv/bin/python scripts/train.py --data data/mar20_yolo/mar20.yaml --name mar20_s_800 --imgsz 800 --batch 16
 
-# оценка: mAP50, mAP50-95, P/R по классам, скорость
+# evaluate: mAP50, mAP50-95, per-class P/R, speed
 .venv/bin/python scripts/eval.py --data data/mar20_yolo/mar20.yaml --weights weights/mar20_s_800.pt --split test
-```
 
-Обучение на GPU — `notebooks/kaggle_train.ipynb` (Kaggle, T4/P100):
-[открыть в Kaggle](https://www.kaggle.com/kernels/welcome?src=https://github.com/miss-mississippi/muxxed_defence_tech/blob/main/notebooks/kaggle_train.ipynb).
+# robustness to noise, blur, compression, resolution, light and haze
+.venv/bin/python scripts/robustness.py --data data/mar20_yolo/mar20.yaml --weights weights/mar20_s_800.pt --split test
 
-```bash
-# проверенные экспертом обнаружения из каталога → датасет YOLO-OBB для дообучения
-.venv/bin/python scripts/export_reviewed.py --out data/reviewed_yolo
-
-# производительность на большой сцене: тайлы/с, Мпикс/с, км²/ч
+# throughput on a large scene: tiles/s, Mpx/s, km²/h
 .venv/bin/python scripts/benchmark.py --size 8192 --gsd 0.5
+
+# reviewed detections from the catalogue -> YOLO-OBB dataset for further fine-tuning
+.venv/bin/python scripts/export_reviewed.py --out data/reviewed_yolo
 ```
 
-## Структура
+Training ran on Kaggle (2× T4); the robustness measurement on trained weights has its own notebook,
+[`notebooks/kaggle_robustness.ipynb`](notebooks/kaggle_robustness.ipynb).
+
+## Repository layout
 
 ```
-detector/     ML-ядро: модель, тайлинг, склейка, геопривязка, сверка габаритов и с реестром
-api/          FastAPI + SQLite-каталог, визуальная проверка оператором, отчёт
-web/          карта Leaflet (библиотека в web/vendor — работает без CDN)
-scripts/      infer, detect_scene, prepare_mar20, train, eval, benchmark, robustness,
-              export_reviewed, recheck_sizes, fetch_demo_scene, check_inventory
-notebooks/    обучение и замеры на Kaggle
-tests/        pytest: тайлинг, склейка, геопривязка, конвертер, API, сверки габаритов и реестра
-samples/      тестовый снимок
-NOTES.md      решения и метрики
+detector/     ML core: models, tiling, merging, georeferencing, size check, registry reconciliation
+api/          FastAPI service, SQLite catalogue, operator review, recall, reports
+web/          Leaflet map (Leaflet is vendored in web/vendor, so it works without a CDN)
+scripts/      inference, scene detection, data preparation, training, evaluation, benchmarks
+notebooks/    Kaggle notebooks for training and robustness measurement
+tests/        pytest: tiling, merging, georeferencing, converter, API, size check, reconciliation, recall
+docs/         technical report, training plots, figures
+NOTES.md      dated engineering log: decisions, measurements, mistakes and corrections
 ```
 
-## Лицензии и происхождение данных
+## Limitations
 
-Мы сознательно используем предобученные веса и трансферное обучение.
+- **No civilian aircraft classes.** MAR20 is military only, so on a civilian airport every airliner gets
+  a military type. The size check flags three of four such cases on the demo; the fourth is a genuine
+  size match.
+- **No sub-metre open imagery of Kazakhstan exists**, so the demo uses Durban. The pipeline takes any
+  georeferenced GeoTIFF without code changes.
+- **The demo review is one operator's visual check**, not an expert assessment, and recall on the demo
+  scenes has not been measured yet; the tool for it is in place.
+- **The size check covers 20 aircraft types**, i.e. 4 of the 201 demo detections. Ships, tanks and
+  vehicles have no reference table yet.
+- **Small vehicles** come out at 0.25–0.35 confidence and are hidden at the default map threshold of 0.4.
+- **The demo data is non-commercial** (MAR20 and Maxar Open Data are CC BY-NC). A real deployment needs
+  licensed imagery and a commercially usable training set.
 
-- **Ultralytics YOLO** — библиотека, AGPL-3.0, <https://github.com/ultralytics/ultralytics>.
-  Поскольку проект использует AGPL-3.0 библиотеку, код проекта также распространяется под AGPL-3.0.
-- **yolo11s-obb.pt** — предобученные веса Ultralytics, обучены на DOTA-v1.0 (15 классов),
-  AGPL-3.0, <https://github.com/ultralytics/assets/releases>.
-- **DOTA** — датасет исходных весов, <https://captain-whu.github.io/DOTA/>. По условиям авторов —
-  только для академического использования.
-- **MAR20** — датасет для дообучения (военные самолёты), CC BY-NC 4.0, <https://gcheng-nwpu.github.io/>.
-- **Демо-снимки (Дурбан)** — Maxar Open Data Program, CC BY-NC 4.0, © Maxar Technologies,
-  <https://registry.opendata.aws/maxar-open-data/>. Не хранятся в репозитории, скачиваются
-  `scripts/fetch_demo_scene.py`.
-- **Снимок Атырау** — Copernicus Sentinel-2 L2A, 14.09.2026, 10 м/px, через AWS Open Data
-  (`sentinel-cogs`), пресет `scripts/fetch_demo_scene.py atyrau_s2`. Данные Copernicus свободны,
-  **включая коммерческое использование** — в отличие от MAR20 и Maxar выше. Использован для замера
-  границы применимости по разрешению (раздел 7 [отчёта](docs/report.md)).
-- **Leaflet 1.9.4** — BSD-2-Clause, <https://leafletjs.com>.
-- Подложки карты: Esri World Imagery и OpenStreetMap — только онлайн, с атрибуцией.
-- **samples/boats.jpg** — пример из документации Ultralytics.
+The full discussion is in the [technical report](docs/report.md#8-limitations).
 
-**Следствие, которое называем сами.** MAR20 и демо-снимки Maxar распространяются по лицензиям
-CC BY-NC — только некоммерческое использование. Для пилотного внедрения этого набора
-недостаточно: нужен лицензированный источник снимков и коммерчески допустимый датасет для
-дообучения. Сам комплекс от источника не зависит и примет любой GeoTIFF заказчика, но данные
-для демонстрации и данные для эксплуатации — разные наборы, и это условие входа, а не
-формальность.
+## Documentation
 
-## Авторы
+- [docs/report.md](docs/report.md): technical report covering methods, input requirements,
+  evaluation methodology, results, limitations and recommendations.
+- [NOTES.md](NOTES.md): the dated engineering log, including failed attempts and corrections after
+  external review.
+- [docs/training](docs/training): training curves, PR curve, confusion matrix, robustness tables.
 
-Оразбай Бекнұр, Онгаров Рамазан.
+## Data and licences
+
+Pretrained weights and transfer learning are used deliberately.
+
+- **Ultralytics YOLO**: AGPL-3.0, <https://github.com/ultralytics/ultralytics>. Because the project uses
+  an AGPL-3.0 library, its code is also distributed under AGPL-3.0.
+- **yolo11s-obb.pt**: Ultralytics pretrained weights trained on DOTA-v1.0 (15 classes), AGPL-3.0,
+  <https://github.com/ultralytics/assets/releases>.
+- **DOTA**: the dataset behind the base weights, <https://captain-whu.github.io/DOTA/>; academic use only
+  per its authors.
+- **MAR20**: the fine-tuning dataset (military aircraft), CC BY-NC 4.0, <https://gcheng-nwpu.github.io/>.
+- **Durban demo imagery**: Maxar Open Data Program, CC BY-NC 4.0, © Maxar Technologies,
+  <https://registry.opendata.aws/maxar-open-data/>. Not stored in the repository; downloaded with
+  `scripts/fetch_demo_scene.py`. The screenshots in `docs/images` are derived from it.
+- **Atyrau imagery**: Copernicus Sentinel-2 L2A, 2026-09-14, 10 m/px, via AWS Open Data
+  (`sentinel-cogs`), preset `scripts/fetch_demo_scene.py atyrau_s2`. Copernicus data is free **including
+  commercial use**, unlike MAR20 and Maxar above.
+- **Leaflet 1.9.4**: BSD-2-Clause, <https://leafletjs.com>.
+- Basemaps: Esri World Imagery and OpenStreetMap, online only, with attribution.
+- **samples/boats.jpg**: an example image from the Ultralytics documentation.
+
+## Authors
+
+Beknur Orazbay and Ramazan Ongarov.

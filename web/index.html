@@ -29,7 +29,9 @@
   select { background: #0d1117; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
   ul { list-style: none; margin: 0; padding: 0; }
   #upload { display: flex; gap: 8px; align-items: center; }
-  #upload input { flex: 1; min-width: 0; }
+  .file-pick { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted);
+    border: 1px dashed var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .file-pick:hover { border-color: var(--muted); color: var(--text); }
   #scenes { max-height: 150px; overflow-y: auto; }
   #scenes li { padding: 6px 8px; border-radius: 6px; cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
   #scenes li:hover, #scenes li.sel { background: #1f2630; }
@@ -82,7 +84,8 @@
     <section>
       <h2>Upload an image</h2>
       <form id="upload">
-        <input type="file" id="file" accept=".tif,.tiff,.jpg,.jpeg,.png">
+        <input type="file" id="file" accept=".tif,.tiff,.jpg,.jpeg,.png" hidden>
+        <label for="file" class="file-pick" id="file-name">Choose an image…</label>
         <button class="primary" id="upload-btn">Process</button>
       </form>
     </section>
@@ -444,6 +447,10 @@ window.removeMissed = removeMissed;
 
 // ---------- events ----------
 
+// the native file input is labelled in the browser's language, so it is hidden behind a label
+const showFileName = () => ($("file-name").textContent = $("file").files[0]?.name || "Choose an image…");
+$("file").addEventListener("change", showFileName);
+
 $("upload").addEventListener("submit", async e => {
   e.preventDefault();
   const file = $("file").files[0];
@@ -455,6 +462,7 @@ $("upload").addEventListener("submit", async e => {
     const scene = await api("/api/scenes", { method: "POST", body: form });
     state.pendingOpen = scene.id;
     $("file").value = "";
+    showFileName();
     loadScenes();
   } catch (err) { toast(err.message); }
   finally { $("upload-btn").disabled = false; }
