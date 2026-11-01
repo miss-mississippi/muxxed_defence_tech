@@ -47,19 +47,17 @@ of 53.0 × 51.8 m and flagged the type as not confirmed (⚠). The operator kept
 ## How it works
 
 ```mermaid
-flowchart LR
-    A["GeoTIFF / JPG / PNG<br/>any size, 8-16 bit"] --> B["1024 px tiles<br/>200 px overlap<br/>one stretch per scene"]
-    B --> C["General model<br/>YOLO11-OBB on DOTA<br/>15 classes"]
-    B --> D["Type model<br/>YOLO11-OBB on MAR20<br/>20 aircraft types"]
-    C --> E["Cross-tile merge<br/>IoS, untruncated boxes win"]
-    D --> E
-    E --> F["Types kept only where<br/>the general model agrees"]
-    F --> G["Pixels to CRS to WGS84<br/>size in metres, azimuth"]
-    G --> H["Size check against<br/>reference dimensions"]
-    H --> I[("SQLite catalogue")]
-    I --> J["REST API, GeoJSON"]
-    I --> K["Map and operator review"]
-    K --> L["Reviewed tiles become<br/>a training set"]
+flowchart TB
+    A["GeoTIFF / JPG / PNG, any size, 8-16 bit"] --> B["1024 px tiles, 200 px overlap, one contrast stretch per scene"]
+    B --> C["General model: YOLO11-OBB on DOTA, 15 classes"]
+    B --> D["Type model: YOLO11-OBB on MAR20, 20 aircraft types"]
+    C & D --> E["Cross-tile merge; types kept only where the general model agrees"]
+    E --> F["Georeferencing: WGS84 polygon, size in metres, azimuth"]
+    F --> G["Size check against reference dimensions"]
+    G --> H[("SQLite catalogue")]
+    H --> I["REST API and GeoJSON"]
+    H --> J["Map and operator review"]
+    J --> K["Reviewed tiles become a training set"]
 ```
 
 - **Oriented boxes.** Aircraft on an apron and ships at a berth sit at arbitrary angles and close
